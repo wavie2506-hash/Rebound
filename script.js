@@ -357,18 +357,16 @@ function showTeamCards(deck, player) {
     if (player === 1) { teamHeader.textContent = 'JOUEUR 1'; teamHeader.className = 'team-header player1'; }
     deck.forEach((playerData, index) => {
         setTimeout(() => {
-            const card = document.createElement('div');
-            card.className = 'intro-card';
-            card.innerHTML = `
-                <div class="intro-card-name">${playerData.name}</div>
-                <div class="intro-card-stats">
-                    🛡️ Défense: ${playerData.defense}<br>
-                    🏀 Rebond: ${playerData.rebond}<br>
-                    ⚡ Attaque: ${playerData.attaque}<br>
-                    🎯 Passe: ${playerData.passe}
-                </div>`;
+            const card = renderCard(playerData, { size: 'small' });
+            card.classList.add('intro-card');
+            card.style.opacity = '0';
+            card.style.transform = 'scale(0.8) rotateY(180deg)';
+            card.style.transition = 'all 0.6s ease-out';
             introCardsGrid.appendChild(card);
-            setTimeout(() => card.classList.add('show'), 50);
+            setTimeout(() => {
+                card.style.opacity = '1';
+                card.style.transform = 'scale(1) rotateY(0deg)';
+            }, 50);
         }, index * 200);
     });
 }
@@ -421,23 +419,14 @@ function showPlayerSelection(player) {
         const isUsedInThisRound = usedIndices.includes(index);
         const hasReachedLimit = usageCount[index] >= 2;
         const isDisabled = isUsedInThisRound || hasReachedLimit;
-        const card = document.createElement('div');
-        card.className = `player-card ${isDisabled ? 'disabled' : ''}`;
         const powerUsed = myPlayerNumber === 1 ? gameState.powersUsed1[index] : gameState.powersUsed2[index];
-        card.innerHTML = `
-            <div class="player-name">${playerData.name}</div>
-            <img src="${playerData.image_url || ''}" alt="${playerData.name}" style="width:100%; max-height:140px; object-fit:contain; border-radius:8px; margin:8px 0;">
-            <div class="player-stats">
-                Position: ${playerData.position || '?'}<br>
-                🛡️ ${playerData.defense} | 🏀 ${playerData.rebond}<br>
-                ⚡ ${playerData.attaque} | 🎯 ${playerData.passe}<br>
-                <small style="color:${usageCount[index] >= 2 ? '#ff0000' : '#666'};">Utilisé: ${usageCount[index]}/2</small>
-            </div>
-            <div class="power-icon power-${playerData.power} ${powerUsed ? 'power-used' : ''}"
-                 data-player-index="${index}" data-power="${playerData.power}"
-                 onclick="event.stopPropagation();">
-                ${powerEmojis[playerData.power] || '🔥'} ${powerNames[playerData.power] || playerData.power}
-            </div>`;
+        const card = renderCard(playerData, {
+            disabled:    isDisabled,
+            powerUsed:   powerUsed,
+            showPower:   true,
+            playerIndex: index,
+            usageCount:  usageCount[index],
+        });
         if (!isDisabled) card.addEventListener('click', () => togglePlayerSelection(index, card));
         playersGrid.appendChild(card);
     });
@@ -448,25 +437,13 @@ function showPlayerSelection(player) {
         const scoreDiff = gameState.score1 - gameState.score2;
         const canUseSixthMan = (myPlayerNumber === 1 && scoreDiff <= 0) || (myPlayerNumber === 2 && scoreDiff >= 0);
         if (canUseSixthMan && !sixthManUsed) {
-            const card = document.createElement('div');
-            card.className = 'player-card';
-            card.style.border = '3px solid gold';
-            card.style.background = 'linear-gradient(135deg, #fff9e6 0%, #ffe6b3 100%)';
             const powerUsedSM = myPlayerNumber === 1 ? gameState.powersUsed1['sixthman'] : gameState.powersUsed2['sixthman'];
-            card.innerHTML = `
-                <div class="player-name">⭐ ${sixthMan.name} ⭐</div>
-                <img src="${sixthMan.image_url || ''}" alt="" style="width:100%; max-height:140px; object-fit:contain; border-radius:8px; margin:8px 0;">
-                <div class="player-stats">
-                    Position: ${sixthMan.position || '?'}<br>
-                    🛡️ ${sixthMan.defense} | 🏀 ${sixthMan.rebond}<br>
-                    ⚡ ${sixthMan.attaque} | 🎯 ${sixthMan.passe}<br>
-                    <small style="color:#ff8800; font-weight:bold;">6E HOMME</small>
-                </div>
-                <div class="power-icon power-${sixthMan.power} ${powerUsedSM ? 'power-used' : ''}"
-                     data-player-index="sixthman" data-power="${sixthMan.power}"
-                     onclick="event.stopPropagation();">
-                    ${powerEmojis[sixthMan.power] || '🔥'} ${powerNames[sixthMan.power] || sixthMan.power}
-                </div>`;
+            const card = renderCard(sixthMan, {
+                isSixthMan:  true,
+                powerUsed:   powerUsedSM,
+                showPower:   true,
+                playerIndex: 'sixthman',
+            });
             card.addEventListener('click', () => toggleSixthManSelection(myPlayerNumber, card));
             playersGrid.appendChild(card);
         }
@@ -497,6 +474,246 @@ function showPlayerSelection(player) {
 
 const powerEmojis = { clutch: '🔥', agressif: '💪', passeur: '🎯', defenseur: '🛡️' };
 const powerNames  = { clutch: 'Clutch', agressif: 'Agressif', passeur: 'Passeur', defenseur: 'Défenseur' };
+
+// ═══════════════════════════════════════════════
+// RENDU DES CARTES — CONSTANTES
+// ═══════════════════════════════════════════════
+const CARD_TEMPLATE_BASE = 'https://vabvmrcihgkieqqktizq.supabase.co/storage/v1/object/public/Animpack/';
+const BADGE_ATT = 'https://vabvmrcihgkieqqktizq.supabase.co/storage/v1/object/public/fonts/attaque.png';
+const BADGE_DEF = 'https://vabvmrcihgkieqqktizq.supabase.co/storage/v1/object/public/fonts/defense.png';
+const BADGE_PAS = 'https://vabvmrcihgkieqqktizq.supabase.co/storage/v1/object/public/fonts/passe.png';
+const BADGE_REB = 'https://vabvmrcihgkieqqktizq.supabase.co/storage/v1/object/public/fonts/rebond.png';
+
+// Positions validées
+const CARD_POS = {
+    photoTop: 27.3, photoH: 47.9, photoW: 97.3,
+    attTop: 68.4, attL: 1.6, attW: 20,   attH: 6.8, attST: 71.8, attSL: 7,
+    defTop: 68.4, defR: 1.3, defW: 20.5, defH: 6.8, defST: 71.8, defSR: 7.4,
+    pasTop: 80.7, pasL: 1.6, pasW: 20.5, pasH: 6.8, pasST: 84,   pasSL: 7,
+    rebTop: 80.7, rebR: 1.3, rebW: 20.5, rebH: 6.8, rebST: 84,   rebSR: 7.4,
+    nameTop: 77.9, nameW: 90, statSize: 18
+};
+
+function dizOffset(val) { return parseInt(val) >= 10 ? 0.2 : 0; }
+
+function adaptiveFontSize(name) {
+    const len = name.length;
+    if (len <= 20) return 18;
+    if (len <= 21) return 17;
+    if (len <= 22) return 16;
+    return 15;
+}
+
+// Retourne le fond PNG selon l'équipe
+// Pour l'instant : fondvierge.png pour tous, à remplacer par team_bg_map[team] quand tu auras les fonds par équipe
+const TEAM_BG_MAP = {};
+function getTeamBg(team) {
+    return TEAM_BG_MAP[team] || (CARD_TEMPLATE_BASE + 'fondvierge.png');
+}
+
+// ═══════════════════════════════════════════════
+// renderCard(playerData, options)
+// Retourne un élément DOM .player-card prêt à insérer
+// options: { selected, disabled, powerUsed, powerLocked, showPower, playerIndex, isSixthMan, size }
+// ═══════════════════════════════════════════════
+function renderCard(playerData, options = {}) {
+    const {
+        selected     = false,
+        disabled     = false,
+        powerUsed    = false,
+        powerLocked  = false,
+        showPower    = false,
+        playerIndex  = null,
+        isSixthMan   = false,
+        size         = 'normal'   // 'normal' | 'small'
+    } = options;
+
+    const isSmall = size === 'small';
+    const cardW   = isSmall ? 150 : 200;
+    const cardH   = isSmall ? 222 : 296;
+
+    const wrap = document.createElement('div');
+    wrap.className = [
+        'player-card',
+        disabled    ? 'disabled'     : '',
+        selected    ? 'selected'     : '',
+        powerLocked ? 'power-locked' : '',
+        isSixthMan  ? 'sixth-man'    : '',
+    ].filter(Boolean).join(' ');
+
+    wrap.style.cssText = `
+        position: relative;
+        width: ${cardW}px;
+        height: ${cardH}px;
+        border-radius: 10px;
+        overflow: hidden;
+        cursor: ${disabled ? 'not-allowed' : 'pointer'};
+        opacity: ${disabled ? '0.4' : '1'};
+        transition: transform 0.2s, box-shadow 0.2s;
+        flex-shrink: 0;
+        ${selected    ? 'transform:scale(1.05); box-shadow:0 0 0 3px #f5576c, 0 8px 24px rgba(0,0,0,0.5);' : ''}
+        ${powerLocked ? 'box-shadow:0 0 0 3px #FFD700, 0 0 20px rgba(255,215,0,0.4);' : ''}
+        ${isSixthMan  ? 'box-shadow:0 0 0 3px gold, 0 0 16px rgba(255,215,0,0.3);' : ''}
+    `;
+
+    // ── Carte PREMIUM : PNG custom affiché tel quel ──
+    if (playerData.card_type === 'premium') {
+        const img = document.createElement('img');
+        img.src = playerData.image_url || '';
+        img.alt = playerData.name;
+        img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;border-radius:10px;';
+        wrap.appendChild(img);
+        if (showPower) _appendPowerBadge(wrap, playerData, powerUsed, playerIndex, cardW);
+        return wrap;
+    }
+
+    // ── z1 : fond PNG équipe ──
+    const bg = document.createElement('img');
+    bg.src = getTeamBg(playerData.team);
+    bg.alt = '';
+    bg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:fill;z-index:1;';
+    wrap.appendChild(bg);
+
+    // ── z2 : photo joueur ──
+    if (playerData.image_url) {
+        const photo = document.createElement('img');
+        photo.src = playerData.image_url;
+        photo.alt = playerData.name;
+        photo.onerror = () => { photo.style.display = 'none'; };
+        photo.style.cssText = `
+            position:absolute;
+            top:${CARD_POS.photoTop}%;
+            left:50%;
+            transform:translateX(-50%);
+            width:${CARD_POS.photoW}%;
+            height:${CARD_POS.photoH}%;
+            object-fit:cover;
+            object-position:top center;
+            z-index:2;
+        `;
+        wrap.appendChild(photo);
+    }
+
+    // ── z3 : 4 badges PNG ──
+    const badges = [
+        { src: BADGE_ATT, top: CARD_POS.attTop, side: 'left',  sideVal: CARD_POS.attL, w: CARD_POS.attW, h: CARD_POS.attH },
+        { src: BADGE_DEF, top: CARD_POS.defTop, side: 'right', sideVal: CARD_POS.defR, w: CARD_POS.defW, h: CARD_POS.defH },
+        { src: BADGE_PAS, top: CARD_POS.pasTop, side: 'left',  sideVal: CARD_POS.pasL, w: CARD_POS.pasW, h: CARD_POS.pasH },
+        { src: BADGE_REB, top: CARD_POS.rebTop, side: 'right', sideVal: CARD_POS.rebR, w: CARD_POS.rebW, h: CARD_POS.rebH },
+    ];
+    badges.forEach(b => {
+        const img = document.createElement('img');
+        img.src = b.src;
+        img.alt = '';
+        img.style.cssText = `
+            position:absolute;
+            top:${b.top}%;
+            ${b.side}:${b.sideVal}%;
+            width:${b.w}%;
+            height:${b.h}%;
+            object-fit:fill;
+            z-index:3;
+        `;
+        wrap.appendChild(img);
+    });
+
+    // ── z4 : chiffres des stats ──
+    const stats = [
+        { val: playerData.attaque,  top: CARD_POS.attST, side: 'left',  offset: CARD_POS.attSL },
+        { val: playerData.defense,  top: CARD_POS.defST, side: 'right', offset: CARD_POS.defSR },
+        { val: playerData.passe,    top: CARD_POS.pasST, side: 'left',  offset: CARD_POS.pasSL },
+        { val: playerData.rebond,   top: CARD_POS.rebST, side: 'right', offset: CARD_POS.rebSR },
+    ];
+    stats.forEach(s => {
+        const el = document.createElement('div');
+        el.textContent = s.val ?? '?';
+        const adj = dizOffset(s.val);
+        el.style.cssText = `
+            position:absolute;
+            top:${s.top}%;
+            ${s.side}:${s.offset - adj}%;
+            font-family:'Berlin Sans FB','Arial Black',sans-serif;
+            font-size:${CARD_POS.statSize}px;
+            font-weight:normal;
+            color:#fff;
+            line-height:1;
+            transform:translateY(-50%);
+            pointer-events:none;
+            z-index:4;
+        `;
+        wrap.appendChild(el);
+    });
+
+    // ── z4 : nom du joueur ──
+    const nameEl = document.createElement('div');
+    nameEl.textContent = playerData.name;
+    nameEl.style.cssText = `
+        position:absolute;
+        top:${CARD_POS.nameTop}%;
+        left:50%;
+        transform:translate(-50%,-50%);
+        width:${CARD_POS.nameW}%;
+        text-align:center;
+        font-family:'Eras Demi ITC','Trebuchet MS',sans-serif;
+        font-size:${adaptiveFontSize(playerData.name)}px;
+        font-weight:normal;
+        color:#fff;
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+        pointer-events:none;
+        z-index:4;
+    `;
+    wrap.appendChild(nameEl);
+
+    // ── z4 : badge usage (Utilisé X/2) ──
+    if (options.usageCount !== undefined) {
+        const usage = document.createElement('div');
+        usage.textContent = `${options.usageCount}/2`;
+        usage.style.cssText = `
+            position:absolute; top:4px; right:6px;
+            font-size:10px; color:${options.usageCount >= 2 ? '#ff4444' : 'rgba(255,255,255,0.6)'};
+            font-weight:bold; z-index:5; pointer-events:none;
+            text-shadow:0 1px 3px rgba(0,0,0,0.8);
+        `;
+        wrap.appendChild(usage);
+    }
+
+    // ── Badge pouvoir ──
+    if (showPower) _appendPowerBadge(wrap, playerData, powerUsed, playerIndex, cardW);
+
+    return wrap;
+}
+
+function _appendPowerBadge(wrap, playerData, powerUsed, playerIndex, cardW) {
+    if (!playerData.power) return;
+    const powerColors = {
+        clutch:    { bg: 'linear-gradient(135deg,#FFD700,#FFA500)', color: '#000' },
+        agressif:  { bg: 'linear-gradient(135deg,#ff0000,#cc0000)', color: '#fff' },
+        passeur:   { bg: 'linear-gradient(135deg,#00bfff,#0080ff)', color: '#fff' },
+        defenseur: { bg: 'linear-gradient(135deg,#32cd32,#228b22)', color: '#fff' },
+    };
+    const pNames = { clutch:'🔥 Clutch', agressif:'💪 Agressif', passeur:'🎯 Passeur', defenseur:'🛡️ Défenseur' };
+    const pc = powerColors[playerData.power] || { bg:'#666', color:'#fff' };
+    const badge = document.createElement('div');
+    badge.className = `power-icon power-${playerData.power} ${powerUsed ? 'power-used' : ''}`;
+    badge.dataset.playerIndex = playerIndex;
+    badge.dataset.power = playerData.power;
+    badge.textContent = pNames[playerData.power] || playerData.power;
+    badge.style.cssText = `
+        position:absolute; bottom:5px; left:50%; transform:translateX(-50%);
+        background:${powerUsed ? '#555' : pc.bg};
+        color:${pc.color};
+        padding:2px 8px; border-radius:4px;
+        font-size:10px; font-weight:bold; white-space:nowrap;
+        opacity:${powerUsed ? 0.4 : 1};
+        cursor:${powerUsed ? 'not-allowed' : 'pointer'};
+        pointer-events:auto; z-index:5;
+    `;
+    wrap.appendChild(badge);
+}
+
+
 
 function selectCategory(category) {
     const categoryMap = { 'defense': 'defenseBtn', 'rebond': 'rebondBtn', 'attaque': 'attaqueBtn', 'passe': 'passeBtn' };
@@ -663,12 +880,15 @@ async function showBattle() {
                     }
                 });
                 total1 += stat;
-                const card = document.createElement('div');
-                card.className = 'battle-card';
-                if (item === 'sixthman') { card.style.border = '3px solid gold'; card.style.background = 'linear-gradient(135deg, #fff9e6 0%, #ffe6b3 100%)'; }
-                card.innerHTML = `<div class="player-name">${player.name}</div><div style="font-size:24px;font-weight:bold;color:#f5576c;">${stat}</div>`;
+                const card = renderCard(player, { size: 'small', isSixthMan: item === 'sixthman' });
+                card.classList.add('battle-card');
+                const so = document.createElement('div');
+                so.textContent = stat;
+                so.style.cssText = 'position:absolute;bottom:6px;left:50%;transform:translateX(-50%);font-size:26px;font-weight:bold;color:#f5576c;z-index:10;text-shadow:0 2px 6px rgba(0,0,0,0.8);';
+                card.appendChild(so);
+                card.style.transform = 'scale(0)'; card.style.transition = 'transform 0.5s';
                 battle1Cards.appendChild(card);
-                setTimeout(() => card.classList.add('show'), 50);
+                setTimeout(() => card.style.transform = 'scale(1)', 50);
             }, i * 600);
         });
 
@@ -684,12 +904,15 @@ async function showBattle() {
                     }
                 });
                 total2 += stat;
-                const card = document.createElement('div');
-                card.className = 'battle-card';
-                if (item === 'sixthman') { card.style.border = '3px solid gold'; card.style.background = 'linear-gradient(135deg, #fff9e6 0%, #ffe6b3 100%)'; }
-                card.innerHTML = `<div class="player-name">${player.name}</div><div style="font-size:24px;font-weight:bold;color:#f5576c;">${stat}</div>`;
+                const card = renderCard(player, { size: 'small', isSixthMan: item === 'sixthman' });
+                card.classList.add('battle-card');
+                const so = document.createElement('div');
+                so.textContent = stat;
+                so.style.cssText = 'position:absolute;bottom:6px;left:50%;transform:translateX(-50%);font-size:26px;font-weight:bold;color:#f5576c;z-index:10;text-shadow:0 2px 6px rgba(0,0,0,0.8);';
+                card.appendChild(so);
+                card.style.transform = 'scale(0)'; card.style.transition = 'transform 0.5s';
                 battle2Cards.appendChild(card);
-                setTimeout(() => card.classList.add('show'), 50);
+                setTimeout(() => card.style.transform = 'scale(1)', 50);
             }, i * 600);
         });
 
@@ -980,45 +1203,23 @@ function showPackReveal(bestCard, otherCards) {
 
     const rarityColors = { bronze: '#cd7f32', argent: '#aaa9ad', or: '#ffd700' };
 
-    function buildCardHTML(card, revealed) {
-        const score = cardScore(card);
-        const color = rarityColors[card.rarity] || '#888';
+    function buildCardEl(card, revealed) {
         if (!revealed) {
-            return `
-                <div class="pack-card pack-card-hidden" data-card-id="${card.id}" style="
-                    width:160px; height:220px; border-radius:12px; cursor:pointer;
-                    background: linear-gradient(135deg, #1a1a2e, #16213e);
-                    border:2px solid rgba(255,255,255,0.1);
-                    display:flex; align-items:center; justify-content:center;
-                    font-size:48px; transition:transform 0.3s;
-                    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-                " onclick="revealPackCard(this, ${card.id})">
-                    🏀
-                </div>`;
+            const hidden = document.createElement('div');
+            hidden.className = 'pack-card pack-card-hidden';
+            hidden.dataset.cardId = card.id;
+            hidden.style.cssText = 'width:160px;height:237px;border-radius:12px;cursor:pointer;background:linear-gradient(135deg,#1a1a2e,#16213e);border:2px solid rgba(255,255,255,0.1);display:flex;align-items:center;justify-content:center;font-size:48px;transition:transform 0.3s;box-shadow:0 8px 32px rgba(0,0,0,0.6);';
+            hidden.textContent = '🏀';
+            hidden.onclick = () => revealPackCard(hidden, card.id);
+            return hidden;
         }
-        return `
-            <div class="pack-card pack-card-revealed" style="
-                width:160px; min-height:220px; border-radius:12px;
-                background:#fff; color:#111;
-                border:3px solid ${color};
-                box-shadow: 0 0 24px ${color}66;
-                display:flex; flex-direction:column; align-items:center;
-                padding:12px 8px; gap:6px;
-                animation: cardFlip 0.5s ease-out;
-            ">
-                ${card.image_url
-                    ? `<img src="${card.image_url}" style="width:100%;height:110px;object-fit:contain;border-radius:6px;">`
-                    : `<div style="width:100%;height:110px;background:#f0f0f0;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:32px;">🏀</div>`
-                }
-                <div style="font-weight:700;font-size:13px;text-align:center;line-height:1.2;">${card.name}</div>
-                <div style="font-size:10px;color:#666;">${card.team}</div>
-                <div style="font-size:11px;color:#333;line-height:1.6;">
-                    🛡️${card.defense} ⚡${card.attaque}<br>🏀${card.rebond} 🎯${card.passe}
-                </div>
-                <div style="font-size:10px;font-weight:700;color:${color};border:1px solid ${color};padding:2px 8px;border-radius:4px;">${card.power || ''}</div>
-                <div style="font-size:9px;font-weight:700;color:${color};">★ ${card.rarity?.toUpperCase() || ''} — ${score} pts</div>
-            </div>`;
+        const el = renderCard(card, { size: 'normal' });
+        el.style.animation = 'cardFlip 0.5s ease-out';
+        el.classList.add('pack-card', 'pack-card-revealed');
+        return el;
     }
+    // Alias pour compatibilité inline HTML existant
+    function buildCardHTML(card, revealed) { return ''; }
 
     revealOverlay.innerHTML = `
         <style>
@@ -1033,20 +1234,7 @@ function showPackReveal(bestCard, otherCards) {
             Tes cartes
         </div>
 
-        <div style="display:flex; gap:24px; align-items:flex-end; flex-wrap:wrap; justify-content:center;">
-            <!-- Meilleure carte : déjà révélée -->
-            <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
-                <div style="font-size:10px;letter-spacing:2px;color:#e8832a;font-weight:600;text-transform:uppercase;">Meilleure carte</div>
-                ${buildCardHTML(bestCard, true)}
-            </div>
-            <!-- 2 autres : face cachée -->
-            ${otherCards.map(card => `
-                <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
-                    <div style="font-size:10px;letter-spacing:2px;color:#6b6560;font-weight:600;text-transform:uppercase;">Clique pour révéler</div>
-                    ${buildCardHTML(card, false)}
-                </div>
-            `).join('')}
-        </div>
+        <div id="packCardsRow" style="display:flex; gap:24px; align-items:flex-end; flex-wrap:wrap; justify-content:center;"></div>
 
         <button onclick="closePackReveal()" style="
             padding:12px 40px;
@@ -1060,6 +1248,29 @@ function showPackReveal(bestCard, otherCards) {
 
     // Stocker les données des cartes cachées pour la révélation au clic
     revealOverlay._otherCards = otherCards;
+
+    // Remplir la rangée de cartes avec renderCard
+    const row = document.getElementById('packCardsRow');
+    // Meilleure carte
+    const bestWrap = document.createElement('div');
+    bestWrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:8px;';
+    const bestLabel = document.createElement('div');
+    bestLabel.style.cssText = 'font-size:10px;letter-spacing:2px;color:#e8832a;font-weight:600;text-transform:uppercase;';
+    bestLabel.textContent = 'Meilleure carte';
+    bestWrap.appendChild(bestLabel);
+    bestWrap.appendChild(buildCardEl(bestCard, true));
+    row.appendChild(bestWrap);
+    // 2 autres cartes cachées
+    otherCards.forEach(oc => {
+        const w = document.createElement('div');
+        w.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:8px;';
+        const lbl = document.createElement('div');
+        lbl.style.cssText = 'font-size:10px;letter-spacing:2px;color:#6b6560;font-weight:600;text-transform:uppercase;';
+        lbl.textContent = 'Clique pour révéler';
+        w.appendChild(lbl);
+        w.appendChild(buildCardEl(oc, false));
+        row.appendChild(w);
+    });
 }
 
 window.revealPackCard = function(el, cardId) {
@@ -1085,20 +1296,10 @@ window.revealPackCard = function(el, cardId) {
         padding:12px 8px; gap:6px;
         animation: cardFlip 0.5s ease-out;
     `;
-    revealed.innerHTML = `
-        ${card.image_url
-            ? `<img src="${card.image_url}" style="width:100%;height:110px;object-fit:contain;border-radius:6px;">`
-            : `<div style="width:100%;height:110px;background:#f0f0f0;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:32px;">🏀</div>`
-        }
-        <div style="font-weight:700;font-size:13px;text-align:center;line-height:1.2;">${card.name}</div>
-        <div style="font-size:10px;color:#666;">${card.team}</div>
-        <div style="font-size:11px;color:#333;line-height:1.6;">
-            🛡️${card.defense} ⚡${card.attaque}<br>🏀${card.rebond} 🎯${card.passe}
-        </div>
-        <div style="font-size:10px;font-weight:700;color:${color};border:1px solid ${color};padding:2px 8px;border-radius:4px;">${card.power || ''}</div>
-        <div style="font-size:9px;font-weight:700;color:${color};">★ ${card.rarity?.toUpperCase() || ''} — ${score} pts</div>
-    `;
-    parent.appendChild(revealed);
+    const revealedCard = renderCard(card, { size: 'normal' });
+    revealedCard.classList.add('pack-card', 'pack-card-revealed');
+    revealedCard.style.animation = 'cardFlip 0.5s ease-out';
+    parent.appendChild(revealedCard);
 };
 
 window.closePackReveal = function() {
@@ -1123,14 +1324,19 @@ function renderEffectif() {
         if (!player) return;
         const slot = document.createElement('div');
         slot.className = 'effectif-slot filled';
-        slot.innerHTML = `
-            <span class="slot-label">Starter ${slotIdx + 1}</span>
-            <img src="${player.image_url || ''}" alt="${player.name}" style="width:100%; max-height:120px; object-fit:contain; border-radius:8px; margin-bottom:8px;">
-            <div class="slot-player-name">${player.name}</div>
-            <div class="slot-player-team">${player.team} – ${player.position || '?'}</div>
-            <div class="slot-player-stats">🛡️ ${player.defense} | 🏀 ${player.rebond}<br>⚡ ${player.attaque} | 🎯 ${player.passe}</div>
-            <div class="slot-power-badge" style="background:${getPowerColor(player.power)}22; color:${getPowerColor(player.power)}; border:1px solid ${getPowerColor(player.power)};">${getPowerLabel(player.power)}</div>
-            <button class="slot-change-btn" data-slot="starter" data-slot-index="${slotIdx}">🔄 Changer</button>`;
+        const label = document.createElement('span');
+        label.className = 'slot-label';
+        label.textContent = `Starter ${slotIdx + 1}`;
+        slot.appendChild(label);
+        const cardEl = renderCard(player, { size: 'small' });
+        cardEl.style.cursor = 'default';
+        slot.appendChild(cardEl);
+        const btn = document.createElement('button');
+        btn.className = 'slot-change-btn';
+        btn.dataset.slot = 'starter';
+        btn.dataset.slotIndex = slotIdx;
+        btn.textContent = '🔄 Changer';
+        slot.appendChild(btn);
         slotsContainer.appendChild(slot);
     });
 
@@ -1138,14 +1344,19 @@ function renderEffectif() {
     if (smPlayer) {
         const smSlot = document.createElement('div');
         smSlot.className = 'effectif-slot filled';
-        smSlot.innerHTML = `
-            <span class="slot-label">6e Homme</span>
-            <img src="${smPlayer.image_url || ''}" alt="${smPlayer.name}" style="width:100%; max-height:120px; object-fit:contain; border-radius:8px; margin-bottom:8px;">
-            <div class="slot-player-name">${smPlayer.name}</div>
-            <div class="slot-player-team">${smPlayer.team} – ${smPlayer.position || '?'}</div>
-            <div class="slot-player-stats">🛡️ ${smPlayer.defense} | 🏀 ${smPlayer.rebond}<br>⚡ ${smPlayer.attaque} | 🎯 ${smPlayer.passe}</div>
-            <div class="slot-power-badge" style="background:${getPowerColor(smPlayer.power)}22; color:${getPowerColor(smPlayer.power)}; border:1px solid ${getPowerColor(smPlayer.power)};">${getPowerLabel(smPlayer.power)}</div>
-            <button class="slot-change-btn" data-slot="sixthman" data-slot-index="0">🔄 Changer</button>`;
+        const smLabel = document.createElement('span');
+        smLabel.className = 'slot-label';
+        smLabel.textContent = '6e Homme';
+        smSlot.appendChild(smLabel);
+        const smCardEl = renderCard(smPlayer, { size: 'small', isSixthMan: true });
+        smCardEl.style.cursor = 'default';
+        smSlot.appendChild(smCardEl);
+        const smBtn = document.createElement('button');
+        smBtn.className = 'slot-change-btn';
+        smBtn.dataset.slot = 'sixthman';
+        smBtn.dataset.slotIndex = '0';
+        smBtn.textContent = '🔄 Changer';
+        smSlot.appendChild(smBtn);
         smContainer.appendChild(smSlot);
     }
 
@@ -1164,15 +1375,16 @@ function openSwapModal(slotType, slotIndex) {
         const player = allCards.find(c => c.id === playerId);
         if (!player) return;
         const isInRoster = roster.starters.includes(playerId) || roster.sixthMan === playerId;
-        const card = document.createElement('div');
-        card.className = `swap-card ${isInRoster ? 'in-roster' : ''}`;
-        card.innerHTML = `
-            <img src="${player.image_url || ''}" alt="${player.name}" style="width:100%; height:140px; object-fit:contain; border-radius:8px; margin-bottom:8px;">
-            <div class="swap-name">${player.name}</div>
-            <div class="swap-team">${player.team} – ${player.position || '?'}</div>
-            <div class="swap-stats">🛡️ ${player.defense} | 🏀 ${player.rebond}<br>⚡ ${player.attaque} | 🎯 ${player.passe}</div>
-            <div style="margin-top:5px; padding:2px 6px; border-radius:4px; font-size:9px; font-weight:bold; background:${getPowerColor(player.power)}22; color:${getPowerColor(player.power)};">${getPowerLabel(player.power)}</div>
-            ${isInRoster ? '<div style="margin-top:5px; color:#ffd700; font-size:10px; font-weight:bold;">★ Dans l\'effectif</div>' : ''}`;
+        const card = renderCard(player, { size: 'small' });
+        card.classList.toggle('in-roster', isInRoster);
+        card.style.opacity = isInRoster ? '0.5' : '1';
+        card.style.cursor  = isInRoster ? 'not-allowed' : 'pointer';
+        if (isInRoster) {
+            const badge = document.createElement('div');
+            badge.textContent = '★ Effectif';
+            badge.style.cssText = 'position:absolute;top:4px;left:50%;transform:translateX(-50%);background:#ffd700;color:#000;font-size:9px;font-weight:bold;padding:1px 6px;border-radius:3px;z-index:10;white-space:nowrap;';
+            card.appendChild(badge);
+        }
         if (!isInRoster) card.addEventListener('click', () => swapPlayer(playerId));
         grid.appendChild(card);
     });
