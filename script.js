@@ -1287,10 +1287,38 @@ window.revealPackCard = function(el, cardId) {
 window.savePackCards = async function() {
     const overlay = document.getElementById('packRevealOverlay');
     const drawn = overlay?._drawnCards;
+
+    // Si aucune carte n'est trouvée, on ferme juste l'écran
     if (!drawn || !drawn.length) {
         overlay?.remove();
         return;
     }
+
+    try {
+        // On récupère les IDs de toutes les cartes qui étaient dans le pack
+        const cardIds = drawn.map(card => card.id);
+
+        // APPEL À SUPABASE : On ajoute ces IDs à la collection du joueur
+        // On utilise la fonction RPC 'append_cards_to_collection' (voir étape 2)
+        const { error } = await window.mySupabase.rpc('append_cards_to_collection', {
+            card_ids_to_add: cardIds
+        });
+
+        if (error) throw error;
+
+        alert("Cartes enregistrées dans ton vestiaire !");
+        
+        // On ferme l'overlay proprement
+        overlay.remove();
+        
+        // Optionnel : On rafraîchit l'affichage du vestiaire si nécessaire
+        if (typeof renderEffectif === "function") renderEffectif();
+
+    } catch (err) {
+        console.error("Erreur lors de la sauvegarde du pack:", err);
+        alert("Problème lors de l'enregistrement. Vérifie ta connexion.");
+    }
+};
 
     const btn = document.getElementById('savePackBtn');
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Enregistrement...'; }
@@ -1344,7 +1372,7 @@ window.savePackCards = async function() {
         console.error('Erreur enregistrement pack:', err);
         if (btn) { btn.disabled = false; btn.textContent = '❌ Erreur — Réessayer'; btn.style.background = '#e53935'; }
     }
-};
+
 
 window.closePackReveal = function() {
     const overlay = document.getElementById('packRevealOverlay');
