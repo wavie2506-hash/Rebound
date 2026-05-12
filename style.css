@@ -290,7 +290,7 @@ html, body { font-family: var(--font-body); background: var(--ink); color: var(-
 #revealContainer { position: absolute; inset: 0; pointer-events: none; }
 #revealPosition { position: absolute; top: 45vh; left: 50%; transform: translateX(-50%); font-family: var(--font-display); font-size: clamp(2.8rem, 9vw, 5rem); letter-spacing: 4px; text-transform: uppercase; text-shadow: 0 0 30px black; opacity: 0; transition: opacity 1s ease-out; }
 #revealLogo { position: absolute; top: 45vh; left: 50%; transform: translateX(-50%); width: clamp(100px, 18vw, 160px); opacity: 0; transition: opacity 1s ease-out; }
-#revealCardContainer {
+##revealCardContainer {
     position: absolute;
     top: 48%;
     left: 50%;
@@ -298,7 +298,7 @@ html, body { font-family: var(--font-body); background: var(--ink); color: var(-
     opacity: 0;
     transition: opacity 1s ease-out;
     transform-origin: center center;
-    scale: 1.6;
+    scale: 1.4;
 }
 #revealCardContainer.visible { opacity: 1; }
 .visible { opacity: 1 !important; }

@@ -55,8 +55,8 @@ async function loadAllCardsAndCollection() {
             // Nettoyer le roster : supprimer les joueurs qui ne sont pas dans owned_cards
             const ownedStrings = ownedCards.map(String);
             roster = {
-                starters: (savedRoster.starters || []).filter(id => ownedStrings.includes(String(id))),
-                sixthMan: ownedStrings.includes(String(savedRoster.sixthMan)) ? savedRoster.sixthMan : null
+                starters: (savedRoster.starters || []).filter(id => id && ownedStrings.includes(String(id))),
+                sixthMan: savedRoster.sixthMan && ownedStrings.includes(String(savedRoster.sixthMan)) ? savedRoster.sixthMan : null
             };
         } else {
             await window.mySupabase.from('player_collections').insert({
@@ -1307,8 +1307,10 @@ window.savePackCards = async function() {
         let ownedList = Array.isArray(coll?.owned_cards) ? [...coll.owned_cards] : [];
 
         for (const card of drawn) {
-            const id = String(card.id);
-            if (!ownedList.map(String).includes(id)) {
+            // Garder l'ID dans son type natif (integer ou uuid selon la DB)
+            const id = card.id;
+            const idStr = String(id);
+            if (!ownedList.map(String).includes(idStr)) {
                 ownedList.push(id);
             }
         }
