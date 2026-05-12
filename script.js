@@ -51,7 +51,10 @@ async function loadAllCardsAndCollection() {
             .from('player_collections').select('roster, owned_cards').eq('user_id', currentUser.id).single();
         if (!collErr && coll) {
             roster = coll.roster || { starters: [], sixthMan: null };
-            ownedCards = coll.owned_cards || [];
+            // Normaliser tous les IDs en nombres pour cohérence
+            ownedCards = (coll.owned_cards || []).map(id => typeof id === 'string' ? parseInt(id, 10) : id).filter(id => !isNaN(id));
+            if (roster.starters) roster.starters = roster.starters.map(id => typeof id === 'string' ? parseInt(id, 10) : id).filter(id => !isNaN(id));
+            if (roster.sixthMan != null) roster.sixthMan = typeof roster.sixthMan === 'string' ? parseInt(roster.sixthMan, 10) : roster.sixthMan;
         } else {
             await window.mySupabase.from('player_collections').insert({
                 user_id: currentUser.id, owned_cards: [], roster: { starters: [], sixthMan: null }
@@ -1089,14 +1092,20 @@ function weightedDraw(pool, count) {
 }
 
 document.getElementById('packsBtn').addEventListener('click', () => {
-    document.getElementById('packChoiceOverlay').classList.add('show');
+    const pco = document.getElementById('packChoiceOverlay');
+    pco.classList.remove('hidden');
+    pco.classList.add('show');
 });
 
 document.querySelectorAll('.pack-option-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         const packType = btn.dataset.packType;
         customConfirm('Ouvrir un pack', `Ouvrir le ${packType === 'basic' ? 'Pack Basique' : 'Pack Premium'} ?`).then(confirmed => {
-            if (confirmed) { document.getElementById('packChoiceOverlay').classList.remove('show'); openPack(packType); }
+            if (confirmed) {
+                const pco = document.getElementById('packChoiceOverlay');
+                pco.classList.remove('show');
+                openPack(packType);
+            }
         });
     });
 });
@@ -1136,6 +1145,9 @@ async function openPack(packType) {
     revealCard.innerHTML = '';
 
     overlay.classList.remove('hidden');
+    overlay.classList.remove('show');
+    // forcer un reflow pour que la transition fonctionne
+    void overlay.offsetWidth;
     overlay.classList.add('show');
     video.currentTime = 0;
     video.play().catch(e => console.error("Erreur vidéo :", e));
@@ -1180,12 +1192,13 @@ async function openPack(packType) {
         let cardCounts = coll?.card_counts  || {};
 
         for (const card of drawnCards) {
-            const id = String(card.id);
-            if (ownedList.includes(id)) {
-                cardCounts[id] = (cardCounts[id] || 1) + 1;
+            const id = parseInt(card.id, 10);
+            if (ownedList.map(x => parseInt(x, 10)).includes(id)) {
+                const sid = String(id);
+                cardCounts[sid] = (cardCounts[sid] || 1) + 1;
             } else {
                 ownedList.push(id);
-                cardCounts[id] = 1;
+                cardCounts[String(id)] = 1;
             }
         }
 
@@ -1348,7 +1361,7 @@ function renderEffectif() {
         : [...roster.starters, ...Array(5 - roster.starters.length).fill(null)];
 
     starterSlots.forEach((playerId, slotIdx) => {
-        const player = playerId ? allCards.find(c => String(c.id) === String(playerId)) : null;
+        const player = playerId != null ? allCards.find(c => parseInt(c.id) === parseInt(playerId)) : null;
         const slot = document.createElement('div');
         slot.className = 'effectif-slot ' + (player ? 'filled' : 'empty-slot');
         const label = document.createElement('span');
@@ -1375,8 +1388,8 @@ function renderEffectif() {
         slotsContainer.appendChild(slot);
     });
 
-    const smPlayer = roster.sixthMan 
-        ? allCards.find(c => String(c.id) === String(roster.sixthMan))
+    const smPlayer = roster.sixthMan != null
+        ? allCards.find(c => parseInt(c.id) === parseInt(roster.sixthMan))
         : null;
     if (smPlayer) {
         const smSlot = document.createElement('div');
@@ -1410,9 +1423,9 @@ function openSwapModal(slotType, slotIndex) {
     const grid = document.getElementById('swapCardsGrid');
     grid.innerHTML = '';
     ownedCards.forEach(playerId => {
-        const player = allCards.find(c => String(c.id) === String(playerId));
+        const player = allCards.find(c => parseInt(c.id) === parseInt(playerId));
         if (!player) return;
-        const isInRoster = roster.starters.map(String).includes(String(playerId)) || String(roster.sixthMan) === String(playerId);
+        const isInRoster = roster.starters.map(id => parseInt(id)).includes(parseInt(playerId)) || parseInt(roster.sixthMan) === parseInt(playerId);
         const card = renderCard(player, { size: 'small' });
         card.classList.toggle('in-roster', isInRoster);
         card.style.opacity = isInRoster ? '0.5' : '1';
@@ -1431,8 +1444,9 @@ function openSwapModal(slotType, slotIndex) {
 
 async function swapPlayer(newPlayerIdx) {
     if (!swapTarget) return;
-    if (swapTarget.slot === 'starter') roster.starters[swapTarget.index] = newPlayerIdx;
-    else roster.sixthMan = newPlayerIdx;
+    const numericId = parseInt(newPlayerIdx, 10);
+    if (swapTarget.slot === 'starter') roster.starters[swapTarget.index] = numericId;
+    else roster.sixthMan = numericId;
     document.getElementById('swapModal').classList.remove('show');
     swapTarget = null;
 
