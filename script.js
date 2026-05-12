@@ -1157,7 +1157,7 @@ async function openPack(packType) {
         const revealCardContainer = document.getElementById('revealCardContainer');
         if (revealCardContainer) {
             revealCardContainer.innerHTML = '';
-            const cardEl = renderCard(bestCard, { size: 'large' });
+            const cardEl = renderCard(bestCard, { size: 'normal' });
             cardEl.style.cursor = 'default';
             revealCardContainer.appendChild(cardEl);
             revealCardContainer.classList.add('visible');
@@ -1315,15 +1315,29 @@ window.savePackCards = async function() {
             }
         }
 
-        const { error: updateErr } = await window.mySupabase
+        console.log('Tentative save ownedList:', ownedList);
+
+        // Essai 1 : IDs natifs (mixed)
+        let { error: updateErr } = await window.mySupabase
             .from('player_collections')
             .update({ owned_cards: ownedList })
             .eq('user_id', currentUser.id);
 
+        // Essai 2 : forcer en integers si erreur de type uuid
+        if (updateErr) {
+            console.warn('Erreur type, tentative integers:', updateErr.message);
+            const intList = ownedList.map(id => parseInt(id)).filter(n => !isNaN(n));
+            const res2 = await window.mySupabase
+                .from('player_collections')
+                .update({ owned_cards: intList })
+                .eq('user_id', currentUser.id);
+            updateErr = res2.error;
+        }
+
         if (updateErr) throw updateErr;
 
+        console.log('✅ Cartes enregistrées !');
         await loadAllCardsAndCollection();
-        console.log('✅ Cartes enregistrées dans la collection !');
         overlay?.remove();
 
     } catch (err) {
