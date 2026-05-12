@@ -212,8 +212,8 @@ html, body { font-family: var(--font-body); background: var(--ink); color: var(-
 .effectif-container { width: 100%; max-width: 1200px; padding: 0 20px 40px; display: none; }
 .effectif-container.show { display: block; }
 .effectif-section-title { font-family: var(--font-display); font-size: 11px; letter-spacing: 4px; text-transform: uppercase; color: var(--muted); margin: 24px 0 14px; text-align: center; }
-.effectif-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; justify-items: center; margin-bottom: 10px; }
-.effectif-slot { background: var(--ink-2); border: 1px dashed var(--line-2); border-radius: var(--radius); padding: 10px 10px 14px; width: 100%; max-width: 240px; text-align: center; min-height: 320px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 8px; position: relative; transition: all 0.15s; }
+.effectif-slots { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; margin-bottom: 20px; }
+.effectif-slot { background: var(--ink-2); border: 1px dashed var(--line-2); border-radius: var(--radius); padding: 10px 10px 14px; width: 220px; flex-shrink: 0; text-align: center; min-height: 340px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 8px; position: relative; transition: all 0.15s; }
 .effectif-slot.filled { border-style: solid; border-color: var(--line-2); }
 .effectif-slot .slot-label { position: absolute; top: -9px; left: 50%; transform: translateX(-50%); background: var(--ink); padding: 1px 10px; border-radius: 10px; font-size: 9px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); white-space: nowrap; border: 1px solid var(--line); }
 .effectif-slot .slot-player-name { font-family: var(--font-display); font-size: 14px; letter-spacing: 0.5px; margin-bottom: 4px; color: var(--chalk); }
@@ -292,3 +292,16 @@ html, body { font-family: var(--font-body); background: var(--ink); color: var(-
 #revealLogo { position: absolute; top: 45vh; left: 50%; transform: translateX(-50%); width: clamp(100px, 18vw, 160px); opacity: 0; transition: opacity 1s ease-out; }
 #revealCard { position: absolute; top: 48%; left: 50%; transform: translate(-50%, -50%); width: clamp(260px, 60vw, 580px); max-height: 55vh; object-fit: contain; opacity: 0; transition: opacity 1s ease-out; }
 .visible { opacity: 1 !important; }
+
+/* Pack reveal — cartes */
+.pack-card-revealed {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+}
+.pack-card-hidden {
+    transition: transform 0.3s;
+}
+.pack-card-hidden:hover {
+    transform: translateY(-8px) scale(1.05);
+}

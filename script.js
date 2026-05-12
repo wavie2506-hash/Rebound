@@ -1296,21 +1296,9 @@ window.revealPackCard = function(el, cardId) {
     const parent = el.parentElement;
     parent.querySelector('.pack-card-hidden')?.remove();
 
-    const revealed = document.createElement('div');
-    revealed.className = 'pack-card pack-card-revealed';
-    revealed.style.cssText = `
-        width:160px; min-height:220px; border-radius:12px;
-        background:#fff; color:#111;
-        border:3px solid ${color};
-        box-shadow: 0 0 24px ${color}66;
-        display:flex; flex-direction:column; align-items:center;
-        padding:12px 8px; gap:6px;
-        animation: cardFlip 0.5s ease-out;
-    `;
     const revealedCard = renderCard(card, { size: 'normal' });
     revealedCard.classList.add('pack-card', 'pack-card-revealed');
     revealedCard.style.animation = 'cardFlip 0.5s ease-out';
-    revealedCard.style.background = 'transparent';
     parent.appendChild(revealedCard);
 };
 
@@ -1331,29 +1319,42 @@ function renderEffectif() {
     slotsContainer.innerHTML = '';
     smContainer.innerHTML = '';
 
-    roster.starters.forEach((playerId, slotIdx) => {
-        const player = allCards.find(c => c.id === playerId);
-        if (!player) return;
+    // Toujours afficher 5 slots même si un joueur n'est pas trouvé
+    const starterSlots = roster.starters.length >= 5 
+        ? roster.starters 
+        : [...roster.starters, ...Array(5 - roster.starters.length).fill(null)];
+
+    starterSlots.forEach((playerId, slotIdx) => {
+        const player = playerId ? allCards.find(c => String(c.id) === String(playerId)) : null;
         const slot = document.createElement('div');
-        slot.className = 'effectif-slot filled';
+        slot.className = 'effectif-slot ' + (player ? 'filled' : 'empty-slot');
         const label = document.createElement('span');
         label.className = 'slot-label';
         label.textContent = `Starter ${slotIdx + 1}`;
         slot.appendChild(label);
-        const cardEl = renderCard(player, { size: 'normal' });
-        cardEl.style.cursor = 'default';
-        cardEl.style.margin = '0 auto';
-        slot.appendChild(cardEl);
-        const btn = document.createElement('button');
-        btn.className = 'slot-change-btn';
-        btn.dataset.slot = 'starter';
-        btn.dataset.slotIndex = slotIdx;
-        btn.textContent = '🔄 Changer';
-        slot.appendChild(btn);
+        if (player) {
+            const cardEl = renderCard(player, { size: 'normal' });
+            cardEl.style.cursor = 'default';
+            cardEl.style.margin = '0 auto';
+            slot.appendChild(cardEl);
+            const btn = document.createElement('button');
+            btn.className = 'slot-change-btn';
+            btn.dataset.slot = 'starter';
+            btn.dataset.slotIndex = slotIdx;
+            btn.textContent = '🔄 Changer';
+            slot.appendChild(btn);
+        } else {
+            const empty = document.createElement('div');
+            empty.className = 'slot-placeholder';
+            empty.textContent = '+ Ajouter';
+            slot.appendChild(empty);
+        }
         slotsContainer.appendChild(slot);
     });
 
-    const smPlayer = allCards.find(c => c.id === roster.sixthMan);
+    const smPlayer = roster.sixthMan 
+        ? allCards.find(c => String(c.id) === String(roster.sixthMan))
+        : null;
     if (smPlayer) {
         const smSlot = document.createElement('div');
         smSlot.className = 'effectif-slot filled';
@@ -1388,7 +1389,7 @@ function openSwapModal(slotType, slotIndex) {
     ownedCards.forEach(playerId => {
         const player = allCards.find(c => c.id === playerId);
         if (!player) return;
-        const isInRoster = roster.starters.includes(playerId) || roster.sixthMan === playerId;
+        const isInRoster = roster.starters.map(String).includes(String(playerId)) || String(roster.sixthMan) === String(playerId);
         const card = renderCard(player, { size: 'small' });
         card.classList.toggle('in-roster', isInRoster);
         card.style.opacity = isInRoster ? '0.5' : '1';
@@ -1405,12 +1406,21 @@ function openSwapModal(slotType, slotIndex) {
     document.getElementById('swapModal').classList.add('show');
 }
 
-function swapPlayer(newPlayerIdx) {
+async function swapPlayer(newPlayerIdx) {
     if (!swapTarget) return;
     if (swapTarget.slot === 'starter') roster.starters[swapTarget.index] = newPlayerIdx;
     else roster.sixthMan = newPlayerIdx;
     document.getElementById('swapModal').classList.remove('show');
     swapTarget = null;
+
+    // Sauvegarder le roster en base
+    try {
+        await window.mySupabase
+            .from('player_collections')
+            .update({ roster })
+            .eq('user_id', currentUser.id);
+    } catch(e) { console.error('Erreur sauvegarde roster:', e); }
+
     renderEffectif();
 }
 
@@ -1441,7 +1451,7 @@ function renderPageContent(pageIndex) {
     page.cards.forEach(playerId => {
         const player = allCards.find(c => c.id === playerId);
         if (!player) return;
-        const isInRoster = roster.starters.includes(playerId) || roster.sixthMan === playerId;
+        const isInRoster = roster.starters.map(String).includes(String(playerId)) || String(roster.sixthMan) === String(playerId);
         cardsHTML += `
             <div class="binder-card">
                 ${isInRoster ? '<div class="col-in-roster">★ Effectif</div>' : ''}
