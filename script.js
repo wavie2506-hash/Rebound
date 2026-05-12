@@ -598,6 +598,7 @@ function renderCard(playerData, options = {}) {
             height:${CARD_POS.photoH}%;
             object-fit:cover;
             object-position:top center;
+            background:transparent;
             z-index:2;
         `;
         wrap.appendChild(photo);
@@ -1144,12 +1145,18 @@ async function openPack(packType) {
         }
     }, 8000);
 
-    // Image de la carte
+    // Carte complète rendue (renderCard) dans la zone revealCard
     setTimeout(() => {
-        if (bestCard.image_url) {
-            revealCard.src = bestCard.image_url;
-            revealCard.classList.add('visible');
-        }
+        revealCard.innerHTML = '';
+        const cardEl = renderCard(bestCard, { size: 'large' });
+        cardEl.style.cssText += `
+            position:relative;
+            transform:none;
+            box-shadow:0 0 60px rgba(232,131,42,0.5);
+            border-radius:14px;
+        `;
+        revealCard.appendChild(cardEl);
+        revealCard.classList.add('visible');
     }, 12000);
 
     // ── 3. SAUVEGARDE EN BASE ────────────────────────────────
@@ -1333,7 +1340,7 @@ function renderEffectif() {
         label.textContent = `Starter ${slotIdx + 1}`;
         slot.appendChild(label);
         if (player) {
-            const cardEl = renderCard(player, { size: 'normal' });
+            const cardEl = renderCard(player, { size: 'large' });
             cardEl.style.cursor = 'default';
             cardEl.style.margin = '0 auto';
             slot.appendChild(cardEl);
@@ -1362,7 +1369,7 @@ function renderEffectif() {
         smLabel.className = 'slot-label';
         smLabel.textContent = '6e Homme';
         smSlot.appendChild(smLabel);
-        const smCardEl = renderCard(smPlayer, { size: 'normal', isSixthMan: true });
+        const smCardEl = renderCard(smPlayer, { size: 'large', isSixthMan: true });
         smCardEl.style.cursor = 'default';
         smCardEl.style.margin = '0 auto';
         smSlot.appendChild(smCardEl);
@@ -1387,7 +1394,7 @@ function openSwapModal(slotType, slotIndex) {
     const grid = document.getElementById('swapCardsGrid');
     grid.innerHTML = '';
     ownedCards.forEach(playerId => {
-        const player = allCards.find(c => c.id === playerId);
+        const player = allCards.find(c => String(c.id) === String(playerId));
         if (!player) return;
         const isInRoster = roster.starters.map(String).includes(String(playerId)) || String(roster.sixthMan) === String(playerId);
         const card = renderCard(player, { size: 'small' });
