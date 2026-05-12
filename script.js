@@ -1332,21 +1332,14 @@ window.revealPackCard = function(el, cardId) {
     parent.appendChild(revealedCard);
 };
 
-window.closePackReveal = async function() {
+window.closePackReveal = function() {
     const overlay = document.getElementById('packRevealOverlay');
     if (overlay) overlay.remove();
-
-    // Toujours recharger la collection depuis Supabase pour être à jour
-    await loadAllCardsAndCollection();
-
-    // Rafraîchir le vestiaire si ouvert, ou retourner au menu principal
+    // Rafraîchir le vestiaire si on y est, sinon juste mettre à jour les données
     const lockerPage = document.getElementById('lockerPage');
     if (lockerPage && lockerPage.classList.contains('show')) {
         if (document.getElementById('effectifContainer').classList.contains('show')) renderEffectif();
         else renderCollection();
-    } else {
-        // Retour au menu principal avec les données fraîches
-        document.getElementById('mainMenu').style.display = 'flex';
     }
 };
 
@@ -1368,9 +1361,7 @@ function renderEffectif() {
         : [...roster.starters, ...Array(5 - roster.starters.length).fill(null)];
 
     starterSlots.forEach((playerId, slotIdx) => {
-        // Ne chercher un joueur QUE si l'id est dans les cartes possédées
-        const isOwned = playerId != null && ownedCards.map(id => parseInt(id)).includes(parseInt(playerId));
-        const player = isOwned ? allCards.find(c => parseInt(c.id) === parseInt(playerId)) : null;
+        const player = playerId != null ? allCards.find(c => parseInt(c.id) === parseInt(playerId)) : null;
         const slot = document.createElement('div');
         slot.className = 'effectif-slot ' + (player ? 'filled' : 'empty-slot');
         const label = document.createElement('span');
@@ -1378,7 +1369,7 @@ function renderEffectif() {
         label.textContent = `Starter ${slotIdx + 1}`;
         slot.appendChild(label);
         if (player) {
-            const cardEl = renderCard(player, { size: 'normal' });
+            const cardEl = renderCard(player, { size: 'large' });
             cardEl.style.cursor = 'default';
             cardEl.style.margin = '0 auto';
             slot.appendChild(cardEl);
@@ -1391,32 +1382,23 @@ function renderEffectif() {
         } else {
             const empty = document.createElement('div');
             empty.className = 'slot-placeholder';
-            empty.innerHTML = '<span style="font-size:28px;opacity:0.3;">🏀</span><br>+ Ajouter une carte<br><small style="font-size:10px;opacity:0.5;">Ouvre des packs pour obtenir des joueurs</small>';
+            empty.textContent = '+ Ajouter';
             slot.appendChild(empty);
-            if (ownedCards.length > 0) {
-                const btn = document.createElement('button');
-                btn.className = 'slot-change-btn';
-                btn.dataset.slot = 'starter';
-                btn.dataset.slotIndex = slotIdx;
-                btn.textContent = '+ Choisir';
-                slot.appendChild(btn);
-            }
         }
         slotsContainer.appendChild(slot);
     });
 
-    // 6e homme : uniquement si possédé
-    const smOwnedId = roster.sixthMan != null && ownedCards.map(id => parseInt(id)).includes(parseInt(roster.sixthMan)) ? roster.sixthMan : null;
-    const smPlayer = smOwnedId != null ? allCards.find(c => parseInt(c.id) === parseInt(smOwnedId)) : null;
-
-    const smSlot = document.createElement('div');
-    smSlot.className = 'effectif-slot ' + (smPlayer ? 'filled' : 'empty-slot');
-    const smLabel = document.createElement('span');
-    smLabel.className = 'slot-label';
-    smLabel.textContent = '6e Homme';
-    smSlot.appendChild(smLabel);
+    const smPlayer = roster.sixthMan != null
+        ? allCards.find(c => parseInt(c.id) === parseInt(roster.sixthMan))
+        : null;
     if (smPlayer) {
-        const smCardEl = renderCard(smPlayer, { size: 'normal', isSixthMan: true });
+        const smSlot = document.createElement('div');
+        smSlot.className = 'effectif-slot filled';
+        const smLabel = document.createElement('span');
+        smLabel.className = 'slot-label';
+        smLabel.textContent = '6e Homme';
+        smSlot.appendChild(smLabel);
+        const smCardEl = renderCard(smPlayer, { size: 'large', isSixthMan: true });
         smCardEl.style.cursor = 'default';
         smCardEl.style.margin = '0 auto';
         smSlot.appendChild(smCardEl);
@@ -1426,21 +1408,8 @@ function renderEffectif() {
         smBtn.dataset.slotIndex = '0';
         smBtn.textContent = '🔄 Changer';
         smSlot.appendChild(smBtn);
-    } else {
-        const empty = document.createElement('div');
-        empty.className = 'slot-placeholder';
-        empty.innerHTML = '<span style="font-size:28px;opacity:0.3;">⭐</span><br>+ Ajouter un 6e homme<br><small style="font-size:10px;opacity:0.5;">Ouvre des packs pour obtenir des joueurs</small>';
-        smSlot.appendChild(empty);
-        if (ownedCards.length > 0) {
-            const smBtnAdd = document.createElement('button');
-            smBtnAdd.className = 'slot-change-btn';
-            smBtnAdd.dataset.slot = 'sixthman';
-            smBtnAdd.dataset.slotIndex = '0';
-            smBtnAdd.textContent = '+ Choisir';
-            smSlot.appendChild(smBtnAdd);
-        }
+        smContainer.appendChild(smSlot);
     }
-    smContainer.appendChild(smSlot);
 
     document.querySelectorAll('.slot-change-btn').forEach(btn => {
         btn.addEventListener('click', function() { openSwapModal(this.dataset.slot, parseInt(this.dataset.slotIndex)); });
