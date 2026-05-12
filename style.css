@@ -279,7 +279,7 @@ html, body { font-family: var(--font-body); background: var(--ink); color: var(-
 .binder-page-indicator { margin-top: 10px; font-size: 10px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); text-align: center; }
 
 #packChoiceOverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.92); z-index: 5000; display: none; flex-direction: column; justify-content: center; align-items: center; gap: 20px; }
-#packChoiceOverlay.show { display: flex !important; }
+#packChoiceOverlay.show { display: flex; }
 #packChoiceOverlay h2 { font-family: var(--font-display); font-size: 16px; letter-spacing: 5px; text-transform: uppercase; color: var(--muted); }
 #packChoiceList { display: flex; flex-direction: column; gap: 8px; }
 #packChoiceList button { padding: 14px 40px; font-family: var(--font-display); font-size: 16px; letter-spacing: 3px; text-transform: uppercase; background: var(--ink-2); color: var(--chalk); border: 1px solid var(--line-2); border-radius: var(--radius); cursor: pointer; min-width: 280px; transition: all 0.15s; }
