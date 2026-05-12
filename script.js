@@ -50,11 +50,14 @@ async function loadAllCardsAndCollection() {
         const { data: coll, error: collErr } = await window.mySupabase
             .from('player_collections').select('roster, owned_cards').eq('user_id', currentUser.id).single();
         if (!collErr && coll) {
-            roster = coll.roster || { starters: [], sixthMan: null };
-            // Normaliser tous les IDs en nombres pour cohérence
-            ownedCards = (coll.owned_cards || []).map(id => typeof id === 'string' ? parseInt(id, 10) : id).filter(id => !isNaN(id));
-            if (roster.starters) roster.starters = roster.starters.map(id => typeof id === 'string' ? parseInt(id, 10) : id).filter(id => !isNaN(id));
-            if (roster.sixthMan != null) roster.sixthMan = typeof roster.sixthMan === 'string' ? parseInt(roster.sixthMan, 10) : roster.sixthMan;
+            ownedCards = coll.owned_cards || [];
+            const savedRoster = coll.roster || { starters: [], sixthMan: null };
+            // Nettoyer le roster : supprimer les joueurs qui ne sont pas dans owned_cards
+            const ownedStrings = ownedCards.map(String);
+            roster = {
+                starters: (savedRoster.starters || []).filter(id => ownedStrings.includes(String(id))),
+                sixthMan: ownedStrings.includes(String(savedRoster.sixthMan)) ? savedRoster.sixthMan : null
+            };
         } else {
             await window.mySupabase.from('player_collections').insert({
                 user_id: currentUser.id, owned_cards: [], roster: { starters: [], sixthMan: null }
@@ -601,7 +604,6 @@ function renderCard(playerData, options = {}) {
             height:${CARD_POS.photoH}%;
             object-fit:cover;
             object-position:top center;
-            background:transparent;
             z-index:2;
         `;
         wrap.appendChild(photo);
@@ -1092,20 +1094,14 @@ function weightedDraw(pool, count) {
 }
 
 document.getElementById('packsBtn').addEventListener('click', () => {
-    const pco = document.getElementById('packChoiceOverlay');
-    pco.classList.remove('hidden');
-    pco.classList.add('show');
+    document.getElementById('packChoiceOverlay').classList.add('show');
 });
 
 document.querySelectorAll('.pack-option-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         const packType = btn.dataset.packType;
         customConfirm('Ouvrir un pack', `Ouvrir le ${packType === 'basic' ? 'Pack Basique' : 'Pack Premium'} ?`).then(confirmed => {
-            if (confirmed) {
-                const pco = document.getElementById('packChoiceOverlay');
-                pco.classList.remove('show');
-                openPack(packType);
-            }
+            if (confirmed) { document.getElementById('packChoiceOverlay').classList.remove('show'); openPack(packType); }
         });
     });
 });
@@ -1121,33 +1117,22 @@ async function openPack(packType) {
     const otherCards = [drawnCards[1], drawnCards[2]];
 
     // ── 2. ANIMATION VIDÉO ──────────────────────────────────
-    const overlay   = document.getElementById('packOpeningOverlay');
-    const video     = document.getElementById('packVideo');
-    const revealPos = document.getElementById('revealPosition');
-    const revealLogo = document.getElementById('revealLogo');
-
-    // revealCard dans le HTML est un <img> → on le remplace par un <div>
-    // pour pouvoir y insérer la carte rendue via renderCard()
-    let revealCard = document.getElementById('revealCard');
-    if (revealCard && revealCard.tagName === 'IMG') {
-        const div = document.createElement('div');
-        div.id = 'revealCard';
-        revealCard.parentNode.replaceChild(div, revealCard);
-        revealCard = div;
-    }
+    const overlay      = document.getElementById('packOpeningOverlay');
+    const video        = document.getElementById('packVideo');
+    const revealPos    = document.getElementById('revealPosition');
+    const revealLogo   = document.getElementById('revealLogo');
 
     // Reset
     revealPos.classList.remove('visible');
     revealLogo.classList.remove('visible');
-    revealCard.classList.remove('visible');
+    const revealCardContainer = document.getElementById('revealCardContainer');
+    if (revealCardContainer) {
+        revealCardContainer.classList.remove('visible');
+        revealCardContainer.innerHTML = '';
+    }
     revealPos.textContent = '';
     revealLogo.src = '';
-    revealCard.innerHTML = '';
 
-    overlay.classList.remove('hidden');
-    overlay.classList.remove('show');
-    // forcer un reflow pour que la transition fonctionne
-    void overlay.offsetWidth;
     overlay.classList.add('show');
     video.currentTime = 0;
     video.play().catch(e => console.error("Erreur vidéo :", e));
@@ -1159,7 +1144,7 @@ async function openPack(packType) {
     }, 4000);
     setTimeout(() => revealPos.classList.remove('visible'), 7000);
 
-    // Logo du club
+    // Logo du club (depuis image_url du logo si dispo, sinon on cache)
     setTimeout(() => {
         if (bestCard['logo.url']) {
             revealLogo.src = bestCard['logo.url'];
@@ -1167,57 +1152,22 @@ async function openPack(packType) {
         }
     }, 8000);
 
-    // Carte complète rendue par renderCard()
+    // Carte complète rendue avec renderCard
     setTimeout(() => {
-        revealCard.innerHTML = '';
-        const cardEl = renderCard(bestCard, { size: 'large' });
-        // on override le cssText inline pour que la carte se positionne correctement dans le flux
-        cardEl.style.position = 'relative';
-        cardEl.style.transform = 'none';
-        cardEl.style.boxShadow = '0 0 60px rgba(232,131,42,0.6)';
-        cardEl.style.borderRadius = '14px';
-        revealCard.appendChild(cardEl);
-        revealCard.classList.add('visible');
+        const revealCardContainer = document.getElementById('revealCardContainer');
+        if (revealCardContainer) {
+            revealCardContainer.innerHTML = '';
+            const cardEl = renderCard(bestCard, { size: 'large' });
+            cardEl.style.cursor = 'default';
+            revealCardContainer.appendChild(cardEl);
+            revealCardContainer.classList.add('visible');
+        }
     }, 12000);
 
-    // ── 3. SAUVEGARDE EN BASE ────────────────────────────────
-    try {
-        const { data: coll } = await window.mySupabase
-            .from('player_collections')
-            .select('owned_cards, card_counts')
-            .eq('user_id', currentUser.id)
-            .single();
-
-        let ownedList  = coll?.owned_cards  || [];
-        let cardCounts = coll?.card_counts  || {};
-
-        for (const card of drawnCards) {
-            const id = parseInt(card.id, 10);
-            if (ownedList.map(x => parseInt(x, 10)).includes(id)) {
-                const sid = String(id);
-                cardCounts[sid] = (cardCounts[sid] || 1) + 1;
-            } else {
-                ownedList.push(id);
-                cardCounts[String(id)] = 1;
-            }
-        }
-
-        await window.mySupabase
-            .from('player_collections')
-            .update({ owned_cards: ownedList, card_counts: cardCounts })
-            .eq('user_id', currentUser.id);
-
-        // Recharge les données globales (ownedCards, roster, allCards)
-        await loadAllCardsAndCollection();
-    } catch (err) {
-        console.error("Erreur sauvegarde pack :", err);
-    }
-
-    // ── 4. AFFICHAGE FIFA APRÈS LA VIDÉO ────────────────────
+    // ── 3. AFFICHAGE FIFA APRÈS LA VIDÉO ────────────────────
     const showPackResult = () => {
         overlay.classList.remove('show');
-        overlay.classList.add('hidden');
-        showPackReveal(bestCard, otherCards);
+        showPackReveal(bestCard, otherCards, drawnCards);
     };
 
     video.onended = () => setTimeout(showPackResult, 1500);
@@ -1226,7 +1176,7 @@ async function openPack(packType) {
 }
 
 // ── ÉCRAN FIFA : révélation des 3 cartes ────────────────────
-function showPackReveal(bestCard, otherCards) {
+function showPackReveal(bestCard, otherCards, drawnCards) {
     // Crée l'overlay de révélation s'il n'existe pas
     let revealOverlay = document.getElementById('packRevealOverlay');
     if (!revealOverlay) {
@@ -1277,18 +1227,20 @@ function showPackReveal(bestCard, otherCards) {
 
         <div id="packCardsRow" style="display:flex; gap:24px; align-items:flex-end; flex-wrap:wrap; justify-content:center;"></div>
 
-        <button onclick="closePackReveal()" style="
+        <button id="savePackBtn" onclick="savePackCards()" style="
             padding:12px 40px;
             font-family:'Bebas Neue',sans-serif;
             font-size:16px; letter-spacing:3px; text-transform:uppercase;
-            background:#e8832a; color:#0c0c0c;
+            background:#4CAF50; color:#fff;
             border:none; border-radius:4px; cursor:pointer;
             margin-top:8px;
-        ">Fermer</button>
+            box-shadow: 0 4px 20px rgba(76,175,80,0.4);
+        ">✅ Enregistrer dans ma collection</button>
     `;
 
-    // Stocker les données des cartes cachées pour la révélation au clic
-    revealOverlay._otherCards = otherCards;
+    // Stocker les données pour révélation et sauvegarde
+    revealOverlay._otherCards  = otherCards;
+    revealOverlay._drawnCards  = drawnCards || [bestCard, ...otherCards];
 
     // Remplir la rangée de cartes avec renderCard
     const row = document.getElementById('packCardsRow');
@@ -1332,22 +1284,55 @@ window.revealPackCard = function(el, cardId) {
     parent.appendChild(revealedCard);
 };
 
-window.closePackReveal = async function() {
+window.savePackCards = async function() {
+    const overlay = document.getElementById('packRevealOverlay');
+    const drawn = overlay?._drawnCards;
+    if (!drawn || !drawn.length) {
+        overlay?.remove();
+        return;
+    }
+
+    const btn = document.getElementById('savePackBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Enregistrement...'; }
+
+    try {
+        const { data: coll, error: collErr } = await window.mySupabase
+            .from('player_collections')
+            .select('owned_cards')
+            .eq('user_id', currentUser.id)
+            .single();
+
+        if (collErr) throw collErr;
+
+        let ownedList = Array.isArray(coll?.owned_cards) ? [...coll.owned_cards] : [];
+
+        for (const card of drawn) {
+            const id = String(card.id);
+            if (!ownedList.map(String).includes(id)) {
+                ownedList.push(id);
+            }
+        }
+
+        const { error: updateErr } = await window.mySupabase
+            .from('player_collections')
+            .update({ owned_cards: ownedList })
+            .eq('user_id', currentUser.id);
+
+        if (updateErr) throw updateErr;
+
+        await loadAllCardsAndCollection();
+        console.log('✅ Cartes enregistrées dans la collection !');
+        overlay?.remove();
+
+    } catch (err) {
+        console.error('Erreur enregistrement pack:', err);
+        if (btn) { btn.disabled = false; btn.textContent = '❌ Erreur — Réessayer'; btn.style.background = '#e53935'; }
+    }
+};
+
+window.closePackReveal = function() {
     const overlay = document.getElementById('packRevealOverlay');
     if (overlay) overlay.remove();
-
-    // Toujours recharger la collection depuis Supabase pour être à jour
-    await loadAllCardsAndCollection();
-
-    // Rafraîchir le vestiaire si ouvert, ou retourner au menu principal
-    const lockerPage = document.getElementById('lockerPage');
-    if (lockerPage && lockerPage.classList.contains('show')) {
-        if (document.getElementById('effectifContainer').classList.contains('show')) renderEffectif();
-        else renderCollection();
-    } else {
-        // Retour au menu principal avec les données fraîches
-        document.getElementById('mainMenu').style.display = 'flex';
-    }
 };
 
 // ═══════════════════════════════════════════════
@@ -1368,9 +1353,7 @@ function renderEffectif() {
         : [...roster.starters, ...Array(5 - roster.starters.length).fill(null)];
 
     starterSlots.forEach((playerId, slotIdx) => {
-        // Ne chercher un joueur QUE si l'id est dans les cartes possédées
-        const isOwned = playerId != null && ownedCards.map(id => parseInt(id)).includes(parseInt(playerId));
-        const player = isOwned ? allCards.find(c => parseInt(c.id) === parseInt(playerId)) : null;
+        const player = playerId ? allCards.find(c => String(c.id) === String(playerId)) : null;
         const slot = document.createElement('div');
         slot.className = 'effectif-slot ' + (player ? 'filled' : 'empty-slot');
         const label = document.createElement('span');
@@ -1378,9 +1361,8 @@ function renderEffectif() {
         label.textContent = `Starter ${slotIdx + 1}`;
         slot.appendChild(label);
         if (player) {
-            const cardEl = renderCard(player, { size: 'normal' });
+            const cardEl = renderCard(player, { size: 'small' });
             cardEl.style.cursor = 'default';
-            cardEl.style.margin = '0 auto';
             slot.appendChild(cardEl);
             const btn = document.createElement('button');
             btn.className = 'slot-change-btn';
@@ -1391,34 +1373,24 @@ function renderEffectif() {
         } else {
             const empty = document.createElement('div');
             empty.className = 'slot-placeholder';
-            empty.innerHTML = '<span style="font-size:28px;opacity:0.3;">🏀</span><br>+ Ajouter une carte<br><small style="font-size:10px;opacity:0.5;">Ouvre des packs pour obtenir des joueurs</small>';
+            empty.textContent = '+ Ajouter';
             slot.appendChild(empty);
-            if (ownedCards.length > 0) {
-                const btn = document.createElement('button');
-                btn.className = 'slot-change-btn';
-                btn.dataset.slot = 'starter';
-                btn.dataset.slotIndex = slotIdx;
-                btn.textContent = '+ Choisir';
-                slot.appendChild(btn);
-            }
         }
         slotsContainer.appendChild(slot);
     });
 
-    // 6e homme : uniquement si possédé
-    const smOwnedId = roster.sixthMan != null && ownedCards.map(id => parseInt(id)).includes(parseInt(roster.sixthMan)) ? roster.sixthMan : null;
-    const smPlayer = smOwnedId != null ? allCards.find(c => parseInt(c.id) === parseInt(smOwnedId)) : null;
-
-    const smSlot = document.createElement('div');
-    smSlot.className = 'effectif-slot ' + (smPlayer ? 'filled' : 'empty-slot');
-    const smLabel = document.createElement('span');
-    smLabel.className = 'slot-label';
-    smLabel.textContent = '6e Homme';
-    smSlot.appendChild(smLabel);
+    const smPlayer = roster.sixthMan 
+        ? allCards.find(c => String(c.id) === String(roster.sixthMan))
+        : null;
     if (smPlayer) {
-        const smCardEl = renderCard(smPlayer, { size: 'normal', isSixthMan: true });
+        const smSlot = document.createElement('div');
+        smSlot.className = 'effectif-slot filled';
+        const smLabel = document.createElement('span');
+        smLabel.className = 'slot-label';
+        smLabel.textContent = '6e Homme';
+        smSlot.appendChild(smLabel);
+        const smCardEl = renderCard(smPlayer, { size: 'small', isSixthMan: true });
         smCardEl.style.cursor = 'default';
-        smCardEl.style.margin = '0 auto';
         smSlot.appendChild(smCardEl);
         const smBtn = document.createElement('button');
         smBtn.className = 'slot-change-btn';
@@ -1426,21 +1398,8 @@ function renderEffectif() {
         smBtn.dataset.slotIndex = '0';
         smBtn.textContent = '🔄 Changer';
         smSlot.appendChild(smBtn);
-    } else {
-        const empty = document.createElement('div');
-        empty.className = 'slot-placeholder';
-        empty.innerHTML = '<span style="font-size:28px;opacity:0.3;">⭐</span><br>+ Ajouter un 6e homme<br><small style="font-size:10px;opacity:0.5;">Ouvre des packs pour obtenir des joueurs</small>';
-        smSlot.appendChild(empty);
-        if (ownedCards.length > 0) {
-            const smBtnAdd = document.createElement('button');
-            smBtnAdd.className = 'slot-change-btn';
-            smBtnAdd.dataset.slot = 'sixthman';
-            smBtnAdd.dataset.slotIndex = '0';
-            smBtnAdd.textContent = '+ Choisir';
-            smSlot.appendChild(smBtnAdd);
-        }
+        smContainer.appendChild(smSlot);
     }
-    smContainer.appendChild(smSlot);
 
     document.querySelectorAll('.slot-change-btn').forEach(btn => {
         btn.addEventListener('click', function() { openSwapModal(this.dataset.slot, parseInt(this.dataset.slotIndex)); });
@@ -1454,9 +1413,9 @@ function openSwapModal(slotType, slotIndex) {
     const grid = document.getElementById('swapCardsGrid');
     grid.innerHTML = '';
     ownedCards.forEach(playerId => {
-        const player = allCards.find(c => parseInt(c.id) === parseInt(playerId));
+        const player = allCards.find(c => c.id === playerId);
         if (!player) return;
-        const isInRoster = roster.starters.map(id => parseInt(id)).includes(parseInt(playerId)) || parseInt(roster.sixthMan) === parseInt(playerId);
+        const isInRoster = roster.starters.map(String).includes(String(playerId)) || String(roster.sixthMan) === String(playerId);
         const card = renderCard(player, { size: 'small' });
         card.classList.toggle('in-roster', isInRoster);
         card.style.opacity = isInRoster ? '0.5' : '1';
@@ -1475,9 +1434,8 @@ function openSwapModal(slotType, slotIndex) {
 
 async function swapPlayer(newPlayerIdx) {
     if (!swapTarget) return;
-    const numericId = parseInt(newPlayerIdx, 10);
-    if (swapTarget.slot === 'starter') roster.starters[swapTarget.index] = numericId;
-    else roster.sixthMan = numericId;
+    if (swapTarget.slot === 'starter') roster.starters[swapTarget.index] = newPlayerIdx;
+    else roster.sixthMan = newPlayerIdx;
     document.getElementById('swapModal').classList.remove('show');
     swapTarget = null;
 
