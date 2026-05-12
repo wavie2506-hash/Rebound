@@ -1112,20 +1112,11 @@ async function openPack(packType) {
     const otherCards = [drawnCards[1], drawnCards[2]];
 
     // ── 2. ANIMATION VIDÉO ──────────────────────────────────
-    const overlay   = document.getElementById('packOpeningOverlay');
-    const video     = document.getElementById('packVideo');
-    const revealPos = document.getElementById('revealPosition');
-    const revealLogo = document.getElementById('revealLogo');
-
-    // revealCard dans le HTML est un <img> → on le remplace par un <div>
-    // pour pouvoir y insérer la carte rendue via renderCard()
-    let revealCard = document.getElementById('revealCard');
-    if (revealCard && revealCard.tagName === 'IMG') {
-        const div = document.createElement('div');
-        div.id = 'revealCard';
-        revealCard.parentNode.replaceChild(div, revealCard);
-        revealCard = div;
-    }
+    const overlay      = document.getElementById('packOpeningOverlay');
+    const video        = document.getElementById('packVideo');
+    const revealPos    = document.getElementById('revealPosition');
+    const revealLogo   = document.getElementById('revealLogo');
+    const revealCard   = document.getElementById('revealCard');
 
     // Reset
     revealPos.classList.remove('visible');
@@ -1133,9 +1124,8 @@ async function openPack(packType) {
     revealCard.classList.remove('visible');
     revealPos.textContent = '';
     revealLogo.src = '';
-    revealCard.innerHTML = '';
+    revealCard.src = '';
 
-    overlay.classList.remove('hidden');
     overlay.classList.add('show');
     video.currentTime = 0;
     video.play().catch(e => console.error("Erreur vidéo :", e));
@@ -1147,7 +1137,7 @@ async function openPack(packType) {
     }, 4000);
     setTimeout(() => revealPos.classList.remove('visible'), 7000);
 
-    // Logo du club
+    // Logo du club (depuis image_url du logo si dispo, sinon on cache)
     setTimeout(() => {
         if (bestCard['logo.url']) {
             revealLogo.src = bestCard['logo.url'];
@@ -1155,15 +1145,16 @@ async function openPack(packType) {
         }
     }, 8000);
 
-    // Carte complète rendue par renderCard()
+    // Carte complète rendue (renderCard) dans la zone revealCard
     setTimeout(() => {
         revealCard.innerHTML = '';
         const cardEl = renderCard(bestCard, { size: 'large' });
-        // on override le cssText inline pour que la carte se positionne correctement dans le flux
-        cardEl.style.position = 'relative';
-        cardEl.style.transform = 'none';
-        cardEl.style.boxShadow = '0 0 60px rgba(232,131,42,0.6)';
-        cardEl.style.borderRadius = '14px';
+        cardEl.style.cssText += `
+            position:relative;
+            transform:none;
+            box-shadow:0 0 60px rgba(232,131,42,0.5);
+            border-radius:14px;
+        `;
         revealCard.appendChild(cardEl);
         revealCard.classList.add('visible');
     }, 12000);
@@ -1177,11 +1168,12 @@ async function openPack(packType) {
             .single();
 
         let ownedList  = coll?.owned_cards  || [];
-        let cardCounts = coll?.card_counts  || {};
+        let cardCounts = coll?.card_counts  || {}; // { cardId: count }
 
         for (const card of drawnCards) {
             const id = String(card.id);
             if (ownedList.includes(id)) {
+                // Doublon : on incrémente le compteur
                 cardCounts[id] = (cardCounts[id] || 1) + 1;
             } else {
                 ownedList.push(id);
@@ -1194,7 +1186,6 @@ async function openPack(packType) {
             .update({ owned_cards: ownedList, card_counts: cardCounts })
             .eq('user_id', currentUser.id);
 
-        // Recharge les données globales (ownedCards, roster, allCards)
         await loadAllCardsAndCollection();
     } catch (err) {
         console.error("Erreur sauvegarde pack :", err);
@@ -1203,7 +1194,6 @@ async function openPack(packType) {
     // ── 4. AFFICHAGE FIFA APRÈS LA VIDÉO ────────────────────
     const showPackResult = () => {
         overlay.classList.remove('show');
-        overlay.classList.add('hidden');
         showPackReveal(bestCard, otherCards);
     };
 
@@ -1322,12 +1312,6 @@ window.revealPackCard = function(el, cardId) {
 window.closePackReveal = function() {
     const overlay = document.getElementById('packRevealOverlay');
     if (overlay) overlay.remove();
-    // Rafraîchir le vestiaire si on y est, sinon juste mettre à jour les données
-    const lockerPage = document.getElementById('lockerPage');
-    if (lockerPage && lockerPage.classList.contains('show')) {
-        if (document.getElementById('effectifContainer').classList.contains('show')) renderEffectif();
-        else renderCollection();
-    }
 };
 
 // ═══════════════════════════════════════════════
