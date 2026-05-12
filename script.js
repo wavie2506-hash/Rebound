@@ -357,7 +357,7 @@ function showTeamCards(deck, player) {
     if (player === 1) { teamHeader.textContent = 'JOUEUR 1'; teamHeader.className = 'team-header player1'; }
     deck.forEach((playerData, index) => {
         setTimeout(() => {
-            const card = renderCard(playerData, { size: 'small' });
+            const card = renderCard(playerData, { size: 'normal' });
             card.classList.add('intro-card');
             card.style.opacity = '0';
             card.style.transform = 'scale(0.8) rotateY(180deg)';
@@ -515,6 +515,8 @@ function getTeamBg(team) {
 // renderCard(playerData, options)
 // Retourne un élément DOM .player-card prêt à insérer
 // options: { selected, disabled, powerUsed, powerLocked, showPower, playerIndex, isSixthMan, size }
+// Tailles disponibles : 'small' (150×222) | 'normal' (200×296) | 'large' (260×385)
+// Toutes les polices sont en em, proportionnelles à la carte
 // ═══════════════════════════════════════════════
 function renderCard(playerData, options = {}) {
     const {
@@ -525,12 +527,19 @@ function renderCard(playerData, options = {}) {
         showPower    = false,
         playerIndex  = null,
         isSixthMan   = false,
-        size         = 'normal'   // 'normal' | 'small'
+        size         = 'normal'
     } = options;
 
-    const isSmall = size === 'small';
-    const cardW   = isSmall ? 150 : 200;
-    const cardH   = isSmall ? 222 : 296;
+    // Dimensions selon taille
+    const SIZES = {
+        small:  { w: 150, h: 222,  statPx: 13, namePx: 11, scale: 150/200 },
+        normal: { w: 200, h: 296,  statPx: 18, namePx: 15, scale: 1       },
+        large:  { w: 260, h: 385,  statPx: 23, namePx: 19, scale: 260/200 },
+    };
+    const sz   = SIZES[size] || SIZES.normal;
+    const cardW = sz.w;
+    const cardH = sz.h;
+    const sc    = sz.scale;  // facteur d'échelle pour les polices
 
     const wrap = document.createElement('div');
     wrap.className = [
@@ -633,7 +642,7 @@ function renderCard(playerData, options = {}) {
             top:${s.top}%;
             ${s.side}:${s.offset - adj}%;
             font-family:'Berlin Sans FB','Arial Black',sans-serif;
-            font-size:${CARD_POS.statSize}px;
+            font-size:${Math.round(CARD_POS.statSize * sc)}px;
             font-weight:normal;
             color:#fff;
             line-height:1;
@@ -647,6 +656,7 @@ function renderCard(playerData, options = {}) {
     // ── z4 : nom du joueur ──
     const nameEl = document.createElement('div');
     nameEl.textContent = playerData.name;
+    const baseFontSize = adaptiveFontSize(playerData.name);
     nameEl.style.cssText = `
         position:absolute;
         top:${CARD_POS.nameTop}%;
@@ -655,7 +665,7 @@ function renderCard(playerData, options = {}) {
         width:${CARD_POS.nameW}%;
         text-align:center;
         font-family:'Eras Demi ITC','Trebuchet MS',sans-serif;
-        font-size:${adaptiveFontSize(playerData.name)}px;
+        font-size:${Math.round(baseFontSize * sc)}px;
         font-weight:normal;
         color:#fff;
         white-space:nowrap;
@@ -1215,6 +1225,7 @@ function showPackReveal(bestCard, otherCards) {
         }
         const el = renderCard(card, { size: 'normal' });
         el.style.animation = 'cardFlip 0.5s ease-out';
+        el.style.background = 'transparent';
         el.classList.add('pack-card', 'pack-card-revealed');
         return el;
     }
@@ -1299,6 +1310,7 @@ window.revealPackCard = function(el, cardId) {
     const revealedCard = renderCard(card, { size: 'normal' });
     revealedCard.classList.add('pack-card', 'pack-card-revealed');
     revealedCard.style.animation = 'cardFlip 0.5s ease-out';
+    revealedCard.style.background = 'transparent';
     parent.appendChild(revealedCard);
 };
 
@@ -1328,8 +1340,9 @@ function renderEffectif() {
         label.className = 'slot-label';
         label.textContent = `Starter ${slotIdx + 1}`;
         slot.appendChild(label);
-        const cardEl = renderCard(player, { size: 'small' });
+        const cardEl = renderCard(player, { size: 'normal' });
         cardEl.style.cursor = 'default';
+        cardEl.style.margin = '0 auto';
         slot.appendChild(cardEl);
         const btn = document.createElement('button');
         btn.className = 'slot-change-btn';
@@ -1348,8 +1361,9 @@ function renderEffectif() {
         smLabel.className = 'slot-label';
         smLabel.textContent = '6e Homme';
         smSlot.appendChild(smLabel);
-        const smCardEl = renderCard(smPlayer, { size: 'small', isSixthMan: true });
+        const smCardEl = renderCard(smPlayer, { size: 'normal', isSixthMan: true });
         smCardEl.style.cursor = 'default';
+        smCardEl.style.margin = '0 auto';
         smSlot.appendChild(smCardEl);
         const smBtn = document.createElement('button');
         smBtn.className = 'slot-change-btn';
