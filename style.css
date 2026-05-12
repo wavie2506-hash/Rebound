@@ -284,8 +284,8 @@ html, body { font-family: var(--font-body); background: var(--ink); color: var(-
 #packChoiceList { display: flex; flex-direction: column; gap: 8px; }
 #packChoiceList button { padding: 14px 40px; font-family: var(--font-display); font-size: 16px; letter-spacing: 3px; text-transform: uppercase; background: var(--ink-2); color: var(--chalk); border: 1px solid var(--line-2); border-radius: var(--radius); cursor: pointer; min-width: 280px; transition: all 0.15s; }
 #packChoiceList button:hover { border-color: var(--amber); color: var(--amber); }
-#packOpeningOverlay { position: fixed; inset: 0; background: black; z-index: 6000; display: none; }
-#packOpeningOverlay.show { display: block; }
+#packOpeningOverlay { position: fixed; inset: 0; background: black; z-index: 6000; display: none !important; }
+#packOpeningOverlay.show { display: block !important; }
 #packVideo { width: 100vw; height: 100vh; object-fit: cover; }
 #revealContainer { position: absolute; inset: 0; pointer-events: none; }
 #revealPosition { position: absolute; top: 45vh; left: 50%; transform: translateX(-50%); font-family: var(--font-display); font-size: clamp(2.8rem, 9vw, 5rem); letter-spacing: 4px; text-transform: uppercase; text-shadow: 0 0 30px black; opacity: 0; transition: opacity 1s ease-out; }
