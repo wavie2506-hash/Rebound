@@ -40,50 +40,31 @@ let gameState = {
 
 // ═══════════════════════════════════════════════
 // CHARGEMENT DONNÉES
-async function loadUserData() {
-    if (!currentUser) return;
+// ═══════════════════════════════════════════════
+async function loadAllCardsAndCollection() {
+    const { data: cards, error: cardsErr } = await window.mySupabase.from('cards').select('*');
+    if (cardsErr) { console.error("Erreur chargement cartes :", cardsErr); return; }
+    allCards = cards || [];
 
-    try {
-        // 1. On s'assure que les cartes du jeu sont là
-        if (!allCards || allCards.length === 0) {
-            console.log("Rechargement de allCards depuis Supabase...");
-            const { data: cards } = await window.mySupabase.from('cards').select('*');
-            allCards = cards || [];
-        }
-
-        // 2. On récupère la collection
-        const { data, error } = await window.mySupabase
-            .from('player_collections')
-            .select('owned_cards')
-            .eq('user_id', currentUser.id)
-            .single();
-
-        if (error) return;
-
-        if (data && data.owned_cards) {
-            // --- LE CORRECTIF EST ICI ---
-            // On force tout en String pour comparer sans erreur de type
-            const ownedIdsStrings = data.owned_cards.map(id => String(id).trim());
-            
-            const userCards = allCards.filter(c => {
-                const cardIdStr = String(c.id).trim();
-                return ownedIdsStrings.includes(cardIdStr);
+    if (currentUser) {
+        const { data: coll, error: collErr } = await window.mySupabase
+            .from('player_collections').select('roster, owned_cards').eq('user_id', currentUser.id).single();
+        if (!collErr && coll) {
+            ownedCards = coll.owned_cards || [];
+            const savedRoster = coll.roster || { starters: [], sixthMan: null };
+            // Nettoyer le roster : supprimer les joueurs qui ne sont pas dans owned_cards
+            const ownedStrings = ownedCards.map(String);
+            roster = {
+                starters: (savedRoster.starters || []).filter(id => id && ownedStrings.includes(String(id))),
+                sixthMan: savedRoster.sixthMan && ownedStrings.includes(String(savedRoster.sixthMan)) ? savedRoster.sixthMan : null
+            };
+        } else {
+            await window.mySupabase.from('player_collections').insert({
+                user_id: currentUser.id, owned_cards: [], roster: { starters: [], sixthMan: null }
             });
-            // ----------------------------
-
-            console.log("Cartes trouvées après filtrage :", userCards.length);
-
-            // On remplit le roster avec les OBJETS complets
-            roster.starters = userCards.slice(0, 5);
-            roster.sixthMan = userCards.slice(5, 6); // On prend la 6ème carte si elle existe
-            
-            // On redessine l'interface
-            if (typeof renderEffectif === 'function') {
-                renderEffectif();
-            }
+            roster = { starters: [], sixthMan: null };
+            ownedCards = [];
         }
-    } catch (err) {
-        console.error("Erreur loadUserData:", err);
     }
 }
 
@@ -1305,99 +1286,37 @@ window.revealPackCard = function(el, cardId) {
 
 window.savePackCards = async function() {
     const overlay = document.getElementById('packRevealOverlay');
-    // On récupère les cartes stockées dans l'overlay pendant le tirage
     const drawn = overlay?._drawnCards;
-
     if (!drawn || !drawn.length) {
-        console.warn("Aucune carte à sauvegarder");
         overlay?.remove();
         return;
     }
-
-    try {
-        // Extraction des IDs (ex: [12, 45, 102])
-        const cardIds = drawn.map(c => parseInt(c.id)).filter(id => !isNaN(id));
-
-        // CORRECTIF : On passe l'objet avec le nom du paramètre SQL
-        const { error } = await window.mySupabase.rpc('append_cards_to_collection', {
-            card_ids_to_add: cardIds
-        });
-
-        if (error) throw error;
-
-        console.log("Cartes sauvegardées avec succès !");
-        
-        // 1. On recharge les données depuis Supabase
-        if (typeof loadUserData === 'function') {
-            await loadUserData(); 
-        }
-
-        // 2. TRÈS IMPORTANT : On redessine le vestiaire avec les nouvelles données
-        if (typeof renderEffectif === 'function') {
-            renderEffectif();
-        }
-        
-        // Nettoyage
-        overlay.remove();
-        if (typeof loadUserData === 'function') await loadUserData(); // Recharge ton vestiaire
-        
-    } catch (err) {
-        console.error("Erreur Supabase:", err);
-        alert("Erreur lors de l'enregistrement.");
-    }
-
 
     const btn = document.getElementById('savePackBtn');
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Enregistrement...'; }
 
     try {
-        const { data: coll, error: collErr } = await window.mySupabase
-            .from('player_collections')
-            .select('owned_cards')
-            .eq('user_id', currentUser.id)
-            .single();
+        // IDs en bigint pour la fonction RPC
+        const cardIds = drawn.map(c => parseInt(c.id)).filter(n => !isNaN(n));
+        console.log('Saving card IDs:', cardIds);
 
-        if (collErr) throw collErr;
+        const { error } = await window.mySupabase
+            .rpc('append_cards_to_collection', { card_ids_to_add: cardIds });
 
-        let ownedList = Array.isArray(coll?.owned_cards) ? [...coll.owned_cards] : [];
+        if (error) throw error;
 
-        for (const card of drawn) {
-            // Garder l'ID dans son type natif (integer ou uuid selon la DB)
-            const id = card.id;
-            const idStr = String(id);
-            if (!ownedList.map(String).includes(idStr)) {
-                ownedList.push(id);
-            }
-        }
-
-        console.log('Tentative save ownedList:', ownedList);
-
-        // Essai 1 : IDs natifs (mixed)
-        let { error: updateErr } = await window.mySupabase
-            .from('player_collections')
-            .update({ owned_cards: ownedList })
-            .eq('user_id', currentUser.id);
-
-        // Essai 2 : forcer en integers si erreur de type uuid
-        if (updateErr) {
-            console.warn('Erreur type, tentative integers:', updateErr.message);
-            const intList = ownedList.map(id => parseInt(id)).filter(n => !isNaN(n));
-            const res2 = await window.mySupabase
-                .from('player_collections')
-                .update({ owned_cards: intList })
-                .eq('user_id', currentUser.id);
-            updateErr = res2.error;
-        }
-
-        if (updateErr) throw updateErr;
-
-        console.log('✅ Cartes enregistrées !');
+        console.log('✅ Cartes enregistrées via RPC !');
         await loadAllCardsAndCollection();
         overlay?.remove();
 
     } catch (err) {
         console.error('Erreur enregistrement pack:', err);
-        if (btn) { btn.disabled = false; btn.textContent = '❌ Erreur — Réessayer'; btn.style.background = '#e53935'; }
+        const btnEl = document.getElementById('savePackBtn');
+        if (btnEl) {
+            btnEl.disabled = false;
+            btnEl.textContent = '❌ Erreur — Réessayer';
+            btnEl.style.background = '#e53935';
+        }
     }
 };
 
