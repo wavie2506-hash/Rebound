@@ -1308,7 +1308,17 @@ window.savePackCards = async function() {
 
         console.log("Cartes sauvegardées avec succès !");
         
-        // Nettoyage et retour au lobby
+        // 1. On recharge les données depuis Supabase
+        if (typeof loadUserData === 'function') {
+            await loadUserData(); 
+        }
+
+        // 2. TRÈS IMPORTANT : On redessine le vestiaire avec les nouvelles données
+        if (typeof renderEffectif === 'function') {
+            renderEffectif();
+        }
+        
+        // Nettoyage
         overlay.remove();
         if (typeof loadUserData === 'function') await loadUserData(); // Recharge ton vestiaire
         
