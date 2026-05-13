@@ -44,45 +44,46 @@ async function loadUserData() {
     if (!currentUser) return;
 
     try {
-        // 1. On charge TOUTES les cartes du jeu (si pas déjà fait)
-        if (allCards.length === 0) {
+        // 1. On s'assure que les cartes du jeu sont là
+        if (!allCards || allCards.length === 0) {
+            console.log("Rechargement de allCards depuis Supabase...");
             const { data: cards } = await window.mySupabase.from('cards').select('*');
             allCards = cards || [];
         }
 
-        // 2. On charge la collection du joueur
+        // 2. On récupère la collection
         const { data, error } = await window.mySupabase
             .from('player_collections')
             .select('owned_cards')
             .eq('user_id', currentUser.id)
             .single();
 
-        if (error) {
-            console.log("Nouvel utilisateur, création de la ligne...");
-            await window.mySupabase.from('player_collections').insert({
-                user_id: currentUser.id, owned_cards: [], roster: { starters: [], sixthMan: null }
-            });
-            return;
-        }
+        if (error) return;
 
         if (data && data.owned_cards) {
-            // On convertit les IDs de la DB en nombres
-            const ownedIds = data.owned_cards.map(id => parseInt(id));
+            // --- LE CORRECTIF EST ICI ---
+            // On force tout en String pour comparer sans erreur de type
+            const ownedIdsStrings = data.owned_cards.map(id => String(id).trim());
             
-            // On récupère les OBJETS cartes correspondants depuis allCards
-            const userCards = allCards.filter(c => ownedIds.includes(parseInt(c.id)));
-            
-            // On remplit le roster pour l'affichage (OBJETS)
-            roster.starters = userCards.slice(0, 5);
-            roster.sixthMan = userCards.length > 5 ? [userCards[5]] : [];
-            
-            console.log("Vestiaire chargé :", userCards.length, "cartes possédées.");
+            const userCards = allCards.filter(c => {
+                const cardIdStr = String(c.id).trim();
+                return ownedIdsStrings.includes(cardIdStr);
+            });
+            // ----------------------------
 
-            // 3. ON FORCE LE DESSIN DU VESTIAIRE
-            if (typeof renderEffectif === 'function') renderEffectif();
+            console.log("Cartes trouvées après filtrage :", userCards.length);
+
+            // On remplit le roster avec les OBJETS complets
+            roster.starters = userCards.slice(0, 5);
+            roster.sixthMan = userCards.slice(5, 6); // On prend la 6ème carte si elle existe
+            
+            // On redessine l'interface
+            if (typeof renderEffectif === 'function') {
+                renderEffectif();
+            }
         }
     } catch (err) {
-        console.error("Erreur chargement données :", err);
+        console.error("Erreur loadUserData:", err);
     }
 }
 
