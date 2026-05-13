@@ -77,8 +77,8 @@ function initRealtime(gameId) {
     channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, (payload) => {
         const updated = payload.new;
         if (updated.status === 'in_progress') syncGameStateFromServer(updated);
-        if (updated.player1_roster) { opponentRoster = updated.player1_roster; opponentDeck = opponentRoster.starters.map(id => allCards.find(c => c.id === id)).filter(Boolean); sixthMan2 = allCards.find(c => c.id === opponentRoster.sixthMan) || {}; }
-        if (updated.player2_roster) { opponentRoster = updated.player2_roster; opponentDeck = opponentRoster.starters.map(id => allCards.find(c => c.id === id)).filter(Boolean); sixthMan2 = allCards.find(c => c.id === opponentRoster.sixthMan) || {}; }
+        if (updated.player1_roster) { opponentRoster = updated.player1_roster; opponentDeck = opponentRoster.starters.map(id => allCards.find(c => String(c.id) === String(id))).filter(Boolean); sixthMan2 = allCards.find(c => String(c.id) === String(opponentRoster.sixthMan)) || {}; }
+        if (updated.player2_roster) { opponentRoster = updated.player2_roster; opponentDeck = opponentRoster.starters.map(id => allCards.find(c => String(c.id) === String(id))).filter(Boolean); sixthMan2 = allCards.find(c => String(c.id) === String(opponentRoster.sixthMan)) || {}; }
         if (updated.player1_selection && myPlayerNumber === 2) gameState.team1Selection = updated.player1_selection;
         if (updated.player2_selection && myPlayerNumber === 1) gameState.team2Selection = updated.player2_selection;
         gameState.score1 = updated.score1 || gameState.score1;
@@ -283,8 +283,8 @@ document.getElementById('passeBtn').addEventListener('click',   () => selectCate
 document.getElementById('confirmBtn').addEventListener('click', confirmSelection);
 
 document.getElementById('playBtn').addEventListener('click', function() {
-    deck1 = roster.starters.map(id => allCards.find(c => c.id === id)).filter(Boolean);
-    sixthMan1 = allCards.find(c => c.id === roster.sixthMan) || { name: "6e Homme par défaut", defense: 7, rebond: 7, attaque: 7, passe: 7, power: "clutch", position: "?" };
+    deck1 = roster.starters.map(id => allCards.find(c => String(c.id) === String(id))).filter(Boolean);
+    sixthMan1 = allCards.find(c => String(c.id) === String(roster.sixthMan)) || { name: "6e Homme par défaut", defense: 7, rebond: 7, attaque: 7, passe: 7, power: "clutch", position: "?" };
     deck2 = deck1.map(card => ({ ...card }));
     sixthMan2 = { ...sixthMan1 };
     document.getElementById('mainMenu').style.display = 'none';
@@ -305,13 +305,13 @@ function syncGameStateFromServer(serverState) {
 
 function startGame() {
     if (isOnlineMode) {
-        deck1 = roster.starters.map(id => allCards.find(c => c.id === id)).filter(Boolean);
-        sixthMan1 = allCards.find(c => c.id === roster.sixthMan) || {};
+        deck1 = roster.starters.map(id => allCards.find(c => String(c.id) === String(id))).filter(Boolean);
+        sixthMan1 = allCards.find(c => String(c.id) === String(roster.sixthMan)) || {};
         deck2 = opponentDeck;
-        sixthMan2 = allCards.find(c => c.id === opponentRoster?.sixthMan) || {};
+        sixthMan2 = allCards.find(c => String(c.id) === String(opponentRoster?.sixthMan)) || {};
     } else {
-        deck1 = roster.starters.map(id => allCards.find(c => c.id === id)).filter(Boolean);
-        sixthMan1 = allCards.find(c => c.id === roster.sixthMan) || {};
+        deck1 = roster.starters.map(id => allCards.find(c => String(c.id) === String(id))).filter(Boolean);
+        sixthMan1 = allCards.find(c => String(c.id) === String(roster.sixthMan)) || {};
         deck2 = deck1.map(card => ({ ...card }));
         sixthMan2 = { ...sixthMan1 };
     }
@@ -1309,6 +1309,15 @@ window.savePackCards = async function() {
         await loadAllCardsAndCollection();
         overlay?.remove();
 
+        // Si le vestiaire est ouvert, re-rendre l'effectif
+        const lockerPage = document.getElementById('lockerPage');
+        if (lockerPage && lockerPage.classList.contains('show')) {
+            renderEffectif();
+        }
+
+        // Message de succès
+        await customAlert('🎉 Cartes ajoutées !', `${cardIds.length} carte(s) ajoutée(s) à ta collection. Va dans le Vestiaire → Effectif → "+ Ajouter" pour les mettre dans ton équipe.`);
+
     } catch (err) {
         console.error('Erreur enregistrement pack:', err);
         const btnEl = document.getElementById('savePackBtn');
@@ -1403,7 +1412,8 @@ function openSwapModal(slotType, slotIndex) {
     const grid = document.getElementById('swapCardsGrid');
     grid.innerHTML = '';
     ownedCards.forEach(playerId => {
-        const player = allCards.find(c => c.id === playerId);
+        // Comparaison tolérante : bigint vs string
+        const player = allCards.find(c => String(c.id) === String(playerId));
         if (!player) return;
         const isInRoster = roster.starters.map(String).includes(String(playerId)) || String(roster.sixthMan) === String(playerId);
         const card = renderCard(player, { size: 'small' });
@@ -1447,13 +1457,13 @@ let binderPages = [], binderCurrentPage = 0, binderIsAnimating = false;
 
 function buildBinderPages() {
     binderPages = [];
-    const teams = [...new Set(ownedCards.map(id => { const card = allCards.find(c => c.id === id); return card ? card.team : null; }).filter(Boolean))].sort();
+    const teams = [...new Set(ownedCards.map(id => { const card = allCards.find(c => String(c.id) === String(id)); return card ? card.team : null; }).filter(Boolean))].sort();
     const CARDS_PER_PHYSICAL_PAGE = 4;
     binderPages.push({ title: '📂 Toutes les cartes', cards: ownedCards.slice(0, CARDS_PER_PHYSICAL_PAGE) });
     for (let i = CARDS_PER_PHYSICAL_PAGE; i < ownedCards.length; i += CARDS_PER_PHYSICAL_PAGE) binderPages.push({ title: '📂 Toutes (suite)', cards: ownedCards.slice(i, i + CARDS_PER_PHYSICAL_PAGE) });
     binderPages.push({ title: '', cards: [], isSeparator: true });
     teams.forEach(team => {
-        const teamCardIds = ownedCards.filter(id => { const card = allCards.find(c => c.id === id); return card && card.team === team; });
+        const teamCardIds = ownedCards.filter(id => { const card = allCards.find(c => String(c.id) === String(id)); return card && card.team === team; });
         binderPages.push({ title: '🏀 ' + team, cards: teamCardIds.slice(0, CARDS_PER_PHYSICAL_PAGE) });
         for (let i = CARDS_PER_PHYSICAL_PAGE; i < teamCardIds.length; i += CARDS_PER_PHYSICAL_PAGE) binderPages.push({ title: '🏀 ' + team + ' (suite)', cards: teamCardIds.slice(i, i + CARDS_PER_PHYSICAL_PAGE) });
     });
@@ -1465,7 +1475,7 @@ function renderPageContent(pageIndex) {
     if (page.isSeparator) return '<div class="page-content" style="display:flex;align-items:center;justify-content:center;"><div style="color:#1e3c72;font-size:13px;opacity:0.4;font-style:italic;">— fin de la collection générale —</div></div>';
     let cardsHTML = '';
     page.cards.forEach(playerId => {
-        const player = allCards.find(c => c.id === playerId);
+        const player = allCards.find(c => String(c.id) === String(playerId));
         if (!player) return;
         const isInRoster = roster.starters.map(String).includes(String(playerId)) || String(roster.sixthMan) === String(playerId);
         cardsHTML += `
