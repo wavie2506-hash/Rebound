@@ -1342,23 +1342,28 @@ function getPowerLabel(power) { return power || ''; }
 
 function renderEffectif() {
     const slotsContainer = document.getElementById('effectifSlots');
-    const smContainer = document.getElementById('sixthManSlot');
+    const smContainer    = document.getElementById('sixthManSlot');
+    const ownedList      = document.getElementById('ownedCardsList');
+    const countEl        = document.getElementById('collectionCount');
     slotsContainer.innerHTML = '';
-    smContainer.innerHTML = '';
+    smContainer.innerHTML    = '';
+    if (ownedList) ownedList.innerHTML = '';
 
-    // Toujours afficher 5 slots même si un joueur n'est pas trouvé
-    const starterSlots = roster.starters.length >= 5 
-        ? roster.starters 
+    // ── 5 Majeurs ──────────────────────────────────────────
+    const starterSlots = roster.starters.length >= 5
+        ? roster.starters
         : [...roster.starters, ...Array(5 - roster.starters.length).fill(null)];
 
     starterSlots.forEach((playerId, slotIdx) => {
         const player = playerId ? allCards.find(c => String(c.id) === String(playerId)) : null;
         const slot = document.createElement('div');
         slot.className = 'effectif-slot ' + (player ? 'filled' : 'empty-slot');
+
         const label = document.createElement('span');
         label.className = 'slot-label';
         label.textContent = `Starter ${slotIdx + 1}`;
         slot.appendChild(label);
+
         if (player) {
             const cardEl = renderCard(player, { size: 'small' });
             cardEl.style.cursor = 'default';
@@ -1378,16 +1383,19 @@ function renderEffectif() {
         slotsContainer.appendChild(slot);
     });
 
-    const smPlayer = roster.sixthMan 
+    // ── 6e Homme ───────────────────────────────────────────
+    const smPlayer = roster.sixthMan
         ? allCards.find(c => String(c.id) === String(roster.sixthMan))
         : null;
+
+    const smSlot = document.createElement('div');
+    smSlot.className = 'effectif-slot ' + (smPlayer ? 'filled' : 'empty-slot');
+    const smLabel = document.createElement('span');
+    smLabel.className = 'slot-label';
+    smLabel.textContent = '6e Homme';
+    smSlot.appendChild(smLabel);
+
     if (smPlayer) {
-        const smSlot = document.createElement('div');
-        smSlot.className = 'effectif-slot filled';
-        const smLabel = document.createElement('span');
-        smLabel.className = 'slot-label';
-        smLabel.textContent = '6e Homme';
-        smSlot.appendChild(smLabel);
         const smCardEl = renderCard(smPlayer, { size: 'small', isSixthMan: true });
         smCardEl.style.cursor = 'default';
         smSlot.appendChild(smCardEl);
@@ -1397,13 +1405,118 @@ function renderEffectif() {
         smBtn.dataset.slotIndex = '0';
         smBtn.textContent = '🔄 Changer';
         smSlot.appendChild(smBtn);
-        smContainer.appendChild(smSlot);
+    } else {
+        const smEmpty = document.createElement('div');
+        smEmpty.className = 'slot-placeholder';
+        smEmpty.textContent = '+ Ajouter';
+        smSlot.appendChild(smEmpty);
+    }
+    smContainer.appendChild(smSlot);
+
+    // Bind boutons "Changer"
+    document.querySelectorAll('.slot-change-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            openSwapModal(this.dataset.slot, parseInt(this.dataset.slotIndex));
+        });
+    });
+
+    // ── Ma Collection (liste scrollable) ──────────────────
+    if (!ownedList) return;
+
+    if (ownedCards.length === 0) {
+        ownedList.innerHTML = '<div style="text-align:center; color:rgba(255,255,255,0.3); padding:30px; font-size:14px;">Aucune carte — ouvre des packs !</div>';
+        if (countEl) countEl.textContent = '(0 carte)';
+        return;
     }
 
-    document.querySelectorAll('.slot-change-btn').forEach(btn => {
-        btn.addEventListener('click', function() { openSwapModal(this.dataset.slot, parseInt(this.dataset.slotIndex)); });
+    if (countEl) countEl.textContent = `(${ownedCards.length} carte${ownedCards.length > 1 ? 's' : ''})`;
+
+    // Grouper par équipe
+    const byTeam = {};
+    ownedCards.forEach(id => {
+        const p = allCards.find(c => String(c.id) === String(id));
+        if (!p) return;
+        const team = p.team || 'Autres';
+        if (!byTeam[team]) byTeam[team] = [];
+        byTeam[team].push(p);
+    });
+
+    Object.keys(byTeam).sort().forEach(team => {
+        // En-tête équipe
+        const teamHeader = document.createElement('div');
+        teamHeader.className = 'owned-team-header';
+        teamHeader.textContent = team;
+        ownedList.appendChild(teamHeader);
+
+        // Grille cartes
+        const row = document.createElement('div');
+        row.className = 'owned-cards-row';
+        ownedList.appendChild(row);
+
+        byTeam[team].forEach(player => {
+            const wrap = document.createElement('div');
+            wrap.className = 'owned-card-wrap';
+
+            const cardEl = renderCard(player, { size: 'small' });
+            cardEl.style.cursor = 'default';
+            wrap.appendChild(cardEl);
+
+            // Boutons d'assignation
+            const btns = document.createElement('div');
+            btns.className = 'owned-card-btns';
+
+            // Starter : dropdown
+            const sel = document.createElement('select');
+            sel.className = 'assign-select';
+            sel.innerHTML = '<option value="">+ Starter</option>';
+            for (let i = 0; i < 5; i++) {
+                const opt = document.createElement('option');
+                opt.value = i;
+                const currentId = roster.starters[i];
+                const isThis = currentId && String(currentId) === String(player.id);
+                opt.textContent = isThis ? `✓ Starter ${i+1}` : `Starter ${i+1}`;
+                if (isThis) opt.selected = true;
+                sel.appendChild(opt);
+            }
+            sel.addEventListener('change', async function() {
+                const slotIdx = parseInt(this.value);
+                if (isNaN(slotIdx)) return;
+                roster.starters[slotIdx] = player.id;
+                await saveRoster();
+                renderEffectif();
+            });
+            btns.appendChild(sel);
+
+            // 6e Homme
+            const smBtnEl = document.createElement('button');
+            smBtnEl.className = 'assign-btn-sm';
+            const isThisSM = roster.sixthMan && String(roster.sixthMan) === String(player.id);
+            smBtnEl.textContent = isThisSM ? '★ 6e H.' : '6e H.';
+            smBtnEl.style.background = isThisSM ? '#ffd700' : 'rgba(255,215,0,0.15)';
+            smBtnEl.style.color = isThisSM ? '#000' : '#ffd700';
+            smBtnEl.addEventListener('click', async () => {
+                roster.sixthMan = player.id;
+                await saveRoster();
+                renderEffectif();
+            });
+            btns.appendChild(smBtnEl);
+
+            wrap.appendChild(btns);
+            row.appendChild(wrap);
+        });
     });
 }
+
+async function saveRoster() {
+    try {
+        const { error } = await window.mySupabase
+            .from('player_collections')
+            .update({ roster })
+            .eq('user_id', currentUser.id);
+        if (error) console.error('Erreur sauvegarde roster:', error);
+    } catch(e) { console.error(e); }
+}
+
 
 let swapTarget = null;
 function openSwapModal(slotType, slotIndex) {
@@ -1438,15 +1551,7 @@ async function swapPlayer(newPlayerIdx) {
     else roster.sixthMan = newPlayerIdx;
     document.getElementById('swapModal').classList.remove('show');
     swapTarget = null;
-
-    // Sauvegarder le roster en base
-    try {
-        await window.mySupabase
-            .from('player_collections')
-            .update({ roster })
-            .eq('user_id', currentUser.id);
-    } catch(e) { console.error('Erreur sauvegarde roster:', e); }
-
+    await saveRoster();
     renderEffectif();
 }
 
@@ -1457,39 +1562,89 @@ let binderPages = [], binderCurrentPage = 0, binderIsAnimating = false;
 
 function buildBinderPages() {
     binderPages = [];
-    const teams = [...new Set(ownedCards.map(id => { const card = allCards.find(c => String(c.id) === String(id)); return card ? card.team : null; }).filter(Boolean))].sort();
-    const CARDS_PER_PHYSICAL_PAGE = 4;
-    binderPages.push({ title: '📂 Toutes les cartes', cards: ownedCards.slice(0, CARDS_PER_PHYSICAL_PAGE) });
-    for (let i = CARDS_PER_PHYSICAL_PAGE; i < ownedCards.length; i += CARDS_PER_PHYSICAL_PAGE) binderPages.push({ title: '📂 Toutes (suite)', cards: ownedCards.slice(i, i + CARDS_PER_PHYSICAL_PAGE) });
-    binderPages.push({ title: '', cards: [], isSeparator: true });
+    const CARDS_PER_PAGE = 4;
+
+    // Récupérer toutes les équipes depuis allCards (pas juste ownedCards)
+    const teams = [...new Set(allCards.map(c => c.team).filter(Boolean))].sort();
+    const ownedStrings = ownedCards.map(String);
+
     teams.forEach(team => {
-        const teamCardIds = ownedCards.filter(id => { const card = allCards.find(c => String(c.id) === String(id)); return card && card.team === team; });
-        binderPages.push({ title: '🏀 ' + team, cards: teamCardIds.slice(0, CARDS_PER_PHYSICAL_PAGE) });
-        for (let i = CARDS_PER_PHYSICAL_PAGE; i < teamCardIds.length; i += CARDS_PER_PHYSICAL_PAGE) binderPages.push({ title: '🏀 ' + team + ' (suite)', cards: teamCardIds.slice(i, i + CARDS_PER_PHYSICAL_PAGE) });
+        const teamCards = allCards.filter(c => c.team === team);
+        const owned = teamCards.filter(c => ownedStrings.includes(String(c.id)));
+        const missing = teamCards.filter(c => !ownedStrings.includes(String(c.id)));
+        // Toutes les cartes de l'équipe (possédées d'abord, puis manquantes)
+        const allTeamCards = [...owned, ...missing];
+
+        // Découper en pages de 4
+        for (let i = 0; i < allTeamCards.length; i += CARDS_PER_PAGE) {
+            binderPages.push({
+                title: team,
+                subtitle: `${owned.length}/${teamCards.length}`,
+                cards: allTeamCards.slice(i, i + CARDS_PER_PAGE),
+                ownedStrings
+            });
+        }
     });
 }
 
+
 function renderPageContent(pageIndex) {
-    if (pageIndex < 0 || pageIndex >= binderPages.length) return '<div class="page-content" style="background:transparent;"></div>';
+    if (pageIndex < 0 || pageIndex >= binderPages.length) {
+        return '<div class="page-content" style="background:transparent;"></div>';
+    }
     const page = binderPages[pageIndex];
-    if (page.isSeparator) return '<div class="page-content" style="display:flex;align-items:center;justify-content:center;"><div style="color:#1e3c72;font-size:13px;opacity:0.4;font-style:italic;">— fin de la collection générale —</div></div>';
+    if (page.isSeparator) {
+        return '<div class="page-content" style="display:flex;align-items:center;justify-content:center;"><div style="color:#1e3c72;font-size:12px;opacity:0.4;font-style:italic;">—</div></div>';
+    }
+
+    const ownedS = page.ownedStrings || [];
     let cardsHTML = '';
-    page.cards.forEach(playerId => {
-        const player = allCards.find(c => String(c.id) === String(playerId));
-        if (!player) return;
-        const isInRoster = roster.starters.map(String).includes(String(playerId)) || String(roster.sixthMan) === String(playerId);
-        cardsHTML += `
+
+    page.cards.forEach(player => {
+        const isOwned = ownedS.includes(String(player.id));
+        const isInRoster = (roster.starters || []).map(String).includes(String(player.id))
+            || String(roster.sixthMan) === String(player.id);
+
+        if (isOwned) {
+            // Carte possédée — affichage normal style binder
+            cardsHTML += `
             <div class="binder-card">
-                ${isInRoster ? '<div class="col-in-roster">★ Effectif</div>' : ''}
-                <img src="${player.image_url || ''}" alt="${player.name}" style="width:100%; height:100px; object-fit:contain; border-radius:6px; margin-bottom:6px;">
+                ${isInRoster ? '<div class="col-in-roster">★</div>' : ''}
+                <img src="${player.image_url || ''}" alt="${player.name}"
+                     style="width:100%;height:70px;object-fit:cover;object-position:top center;border-radius:4px;margin-bottom:4px;"
+                     onerror="this.style.display='none'">
                 <div class="col-name">${player.name}</div>
-                <div class="col-team">${player.team} – ${player.position || '?'}</div>
-                <div class="col-stats">🛡️ ${player.defense} | 🏀 ${player.rebond}<br>⚡ ${player.attaque} | 🎯 ${player.passe}</div>
-                <div class="col-power" style="background:${getPowerColor(player.power)}22; color:${getPowerColor(player.power)};">${getPowerLabel(player.power)}</div>
+                <div class="col-stats" style="font-size:8px;color:#555;line-height:1.5;">
+                    <span style="color:#e63329">●${player.attaque}</span>
+                    <span style="color:#00b8d9">●${player.defense}</span>
+                    <span style="color:#6abf45">●${player.passe}</span>
+                    <span style="color:#f0b429">●${player.rebond}</span>
+                </div>
             </div>`;
+        } else {
+            // Carte manquante — silhouette
+            cardsHTML += `
+            <div class="binder-card binder-card-missing">
+                <div style="width:100%;height:70px;background:#e8e4dc;border-radius:4px;margin-bottom:4px;display:flex;align-items:center;justify-content:center;font-size:24px;color:rgba(30,60,114,0.15);">?</div>
+                <div class="col-name" style="color:rgba(30,60,114,0.3);">${player.name}</div>
+                <div style="font-size:8px;color:rgba(30,60,114,0.2);">Non possédée</div>
+            </div>`;
+        }
     });
-    return `<div class="page-content"><div class="page-title">${page.title}</div><div class="page-cards-grid">${cardsHTML}</div></div>`;
+
+    // Compteur possédées/total
+    const owned = page.cards.filter(p => ownedS.includes(String(p.id))).length;
+    const total = page.cards.length;
+
+    return `<div class="page-content">
+        <div class="page-title">
+            ${page.title}
+            <span style="font-size:9px;color:rgba(30,60,114,0.5);margin-left:6px;">${page.subtitle || ''}</span>
+        </div>
+        <div class="page-cards-grid">${cardsHTML}</div>
+    </div>`;
 }
+
 
 function renderBinder() {
     const leftIdx = binderCurrentPage * 2 - 1, rightIdx = binderCurrentPage * 2;
@@ -1545,7 +1700,16 @@ function flipPageBackward() {
     });
 }
 
-function renderCollection() { buildBinderPages(); binderCurrentPage = 0; renderBinder(); }
+function renderCollection() {
+    // Classeur : toutes les cartes du jeu classées par équipe
+    // Possédées = couleur normale, manquantes = grisées avec silhouette
+    buildBinderPages();
+    binderCurrentPage = 0;
+    renderBinder();
+}
+
+// buildBinderPages réécrit : toutes les cartes du jeu, groupées par équipe
+// Possédées et manquantes
 
 // ═══════════════════════════════════════════════
 // EVENT LISTENERS VESTIAIRE

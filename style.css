@@ -313,3 +313,81 @@ html, body { font-family: var(--font-body); background: var(--ink); color: var(-
 .pack-card-hidden:hover {
     transform: translateY(-8px) scale(1.05);
 }
+
+
+/* ═══════════════════════════════════════════
+   EFFECTIF — Ma Collection (liste scrollable)
+   ═══════════════════════════════════════════ */
+.owned-cards-list {
+    width: 100%;
+    padding: 0 20px 40px;
+    overflow-y: auto;
+}
+.owned-team-header {
+    font-family: var(--font-display);
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--amber);
+    padding: 18px 0 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 12px;
+}
+.owned-cards-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+.owned-card-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+.owned-card-btns {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+.assign-select {
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 5px;
+    color: #fff;
+    font-size: 10px;
+    padding: 4px 6px;
+    cursor: pointer;
+    outline: none;
+    max-width: 90px;
+}
+.assign-select:focus {
+    border-color: var(--amber);
+}
+.assign-btn-sm {
+    border: 1px solid rgba(255,215,0,0.3);
+    border-radius: 5px;
+    font-size: 10px;
+    font-weight: bold;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+.assign-btn-sm:hover {
+    opacity: 0.85;
+    transform: scale(1.05);
+}
+
+/* ═══════════════════════════════════════════
+   CLASSEUR — Cartes manquantes
+   ═══════════════════════════════════════════ */
+.binder-card-missing {
+    opacity: 0.45;
+    filter: grayscale(100%);
+    cursor: not-allowed;
+}
+.binder-card-missing:hover {
+    transform: none;
+    box-shadow: none;
+}
