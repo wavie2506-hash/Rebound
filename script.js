@@ -74,6 +74,7 @@ async function loadAllCardsAndCollection() {
 
         // Filet de sécurité : si le compte n'a aucune carte (ex: trigger SQL de pack de
         // bienvenue absent/ancien compte), offrir 2 packs de 3 cartes (6 au total) ici.
+        // Fait silencieusement (pas d'alerte bloquante) pour ne jamais geler l'écran de connexion.
         if (ownedCards.length === 0 && allCards.length > 0) {
             const welcomeCards = weightedDraw(allCards, 6);
             const cardIds = welcomeCards.map(c => parseInt(c.id)).filter(n => !isNaN(n));
@@ -81,7 +82,7 @@ async function loadAllCardsAndCollection() {
                 const { error: welcomeErr } = await window.mySupabase.rpc('append_cards_to_collection', { card_ids_to_add: cardIds });
                 if (!welcomeErr) {
                     ownedCards = cardIds;
-                    await customAlert('🎁 Cadeau de bienvenue', '2 packs de 3 cartes ont été ajoutés à ta collection !');
+                    console.log('🎁 Pack de bienvenue attribué :', cardIds);
                 } else {
                     console.error('Erreur attribution pack de bienvenue :', welcomeErr);
                 }
