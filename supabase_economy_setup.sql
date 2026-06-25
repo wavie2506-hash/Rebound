@@ -459,3 +459,51 @@ begin
     return new;
 end;
 $$;
+
+-- ── 15. Correction des contraintes de suppression (ON DELETE) ──────────────
+-- Sans ON DELETE CASCADE, Postgres refuse de supprimer un auth.users tant qu'une
+-- ligne profiles y fait encore référence ("Database error deleting user" dans le
+-- dashboard Supabase). Ce bloc retrouve dynamiquement les contraintes existantes
+-- (peu importe leur nom auto-généré) et les recrée avec la bonne clause ON DELETE.
+do $$
+declare
+    v_constraint record;
+begin
+    -- profiles.id -> auth.users.id : doit cascader (supprimer le profil avec le user)
+    for v_constraint in
+        select tc.constraint_name
+        from information_schema.table_constraints tc
+        join information_schema.key_column_usage kcu on kcu.constraint_name = tc.constraint_name
+        where tc.table_schema = 'public' and tc.table_name = 'profiles'
+          and tc.constraint_type = 'FOREIGN KEY' and kcu.column_name = 'id'
+    loop
+        execute format('alter table public.profiles drop constraint %I', v_constraint.constraint_name);
+    end loop;
+    alter table public.profiles
+        add constraint profiles_id_fkey foreign key (id) references auth.users(id) on delete cascade;
+
+    -- player_collections.user_id -> profiles.id : doit cascader
+    for v_constraint in
+        select tc.constraint_name
+        from information_schema.table_constraints tc
+        join information_schema.key_column_usage kcu on kcu.constraint_name = tc.constraint_name
+        where tc.table_schema = 'public' and tc.table_name = 'player_collections'
+          and tc.constraint_type = 'FOREIGN KEY' and kcu.column_name = 'user_id'
+    loop
+        execute format('alter table public.player_collections drop constraint %I', v_constraint.constraint_name);
+    end loop;
+    alter table public.player_collections
+        add constraint player_collections_user_id_fkey foreign key (user_id) references public.profiles(id) on delete cascade;
+
+    -- games.player1_id / player2_id / winner_id -> profiles.id : passent à NULL si le profil disparaît
+    for v_constraint in
+        select tc.constraint_name, kcu.column_name
+        from information_schema.table_constraints tc
+        join information_schema.key_column_usage kcu on kcu.constraint_name = tc.constraint_name
+        where tc.table_schema = 'public' and tc.table_name = 'games'
+          and tc.constraint_type = 'FOREIGN KEY' and kcu.column_name in ('player1_id', 'player2_id', 'winner_id')
+    loop
+        execute format('alter table public.games drop constraint %I', v_constraint.constraint_name);
+        execute format('alter table public.games add constraint games_%s_fkey foreign key (%I) references public.profiles(id) on delete set null', v_constraint.column_name, v_constraint.column_name);
+    end loop;
+end $$;

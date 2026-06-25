@@ -71,6 +71,23 @@ async function loadAllCardsAndCollection() {
             ownedCards = [];
             playerEconomy = { credits: 0, tokens: 0, xp: 0, passLevel: 0 };
         }
+
+        // Filet de sécurité : si le compte n'a aucune carte (ex: trigger SQL de pack de
+        // bienvenue absent/ancien compte), offrir 2 packs de 3 cartes (6 au total) ici.
+        if (ownedCards.length === 0 && allCards.length > 0) {
+            const welcomeCards = weightedDraw(allCards, 6);
+            const cardIds = welcomeCards.map(c => parseInt(c.id)).filter(n => !isNaN(n));
+            if (cardIds.length > 0) {
+                const { error: welcomeErr } = await window.mySupabase.rpc('append_cards_to_collection', { card_ids_to_add: cardIds });
+                if (!welcomeErr) {
+                    ownedCards = cardIds;
+                    await customAlert('🎁 Cadeau de bienvenue', '2 packs de 3 cartes ont été ajoutés à ta collection !');
+                } else {
+                    console.error('Erreur attribution pack de bienvenue :', welcomeErr);
+                }
+            }
+        }
+
         updateCurrencyDisplay();
     }
 }
