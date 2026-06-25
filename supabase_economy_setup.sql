@@ -377,3 +377,85 @@ begin
     return query select v_tokens;
 end;
 $$;
+
+-- ── 13. Tirage pondéré de cartes (même logique que weightedDraw() côté client) ──
+-- Score d'une carte = somme des 4 stats ; poids inversé = (maxScore_du_pool_restant - score + 1).
+-- Tirage sans remise : à chaque carte tirée, le maxScore du pool restant est recalculé.
+create or replace function public.draw_weighted_cards(p_count int)
+returns setof bigint
+language plpgsql
+as $$
+declare
+    v_remaining record;
+    v_max_score int;
+    v_total_weight numeric;
+    v_rand numeric;
+    v_chosen_id bigint;
+    v_drawn_ids bigint[] := array[]::bigint[];
+    i int;
+begin
+    for i in 1..p_count loop
+        select max(coalesce(attaque,0) + coalesce(rebond,0) + coalesce(passe,0) + coalesce(defense,0))
+            into v_max_score
+            from public.cards
+            where not (id = any(v_drawn_ids));
+
+        if v_max_score is null then
+            exit; -- plus de cartes disponibles
+        end if;
+
+        select sum(v_max_score - (coalesce(attaque,0) + coalesce(rebond,0) + coalesce(passe,0) + coalesce(defense,0)) + 1)
+            into v_total_weight
+            from public.cards
+            where not (id = any(v_drawn_ids));
+
+        v_rand := random() * v_total_weight;
+        v_chosen_id := null;
+
+        for v_remaining in
+            select id, (v_max_score - (coalesce(attaque,0) + coalesce(rebond,0) + coalesce(passe,0) + coalesce(defense,0)) + 1) as weight
+            from public.cards
+            where not (id = any(v_drawn_ids))
+            order by id
+        loop
+            v_rand := v_rand - v_remaining.weight;
+            if v_rand <= 0 then
+                v_chosen_id := v_remaining.id;
+                exit;
+            end if;
+        end loop;
+
+        if v_chosen_id is null then
+            select id into v_chosen_id from public.cards where not (id = any(v_drawn_ids)) limit 1;
+        end if;
+
+        v_drawn_ids := array_append(v_drawn_ids, v_chosen_id);
+    end loop;
+
+    return query select unnest(v_drawn_ids);
+end;
+$$;
+
+-- ── 14. Pack de bienvenue : 2 packs de 3 cartes (6 cartes) offerts à l'inscription ──
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+as $$
+declare
+    v_welcome_cards bigint[];
+begin
+    insert into public.profiles (id, username)
+    values (new.id, new.email)
+    on conflict (id) do nothing;
+
+    select coalesce(array_agg(c), array[]::bigint[]) into v_welcome_cards
+        from public.draw_weighted_cards(6) c;
+
+    insert into public.player_collections (user_id, owned_cards)
+    values (new.id, v_welcome_cards)
+    on conflict (user_id) do nothing;
+
+    return new;
+end;
+$$;
