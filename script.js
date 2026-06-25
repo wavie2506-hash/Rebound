@@ -17,9 +17,12 @@ let isOnlineMode = false;
 let myPlayerNumber = 1;
 let opponentRoster = {};
 let opponentDeck = [];
+let gameHasStarted = false;
+let lastAppliedBattleId = null;
 let allCards = [];
 let roster = { starters: [], sixthMan: null };
 let ownedCards = [];
+let playerEconomy = { credits: 0, tokens: 0, xp: 0, passLevel: 0 };
 
 let deck1 = [], deck2 = [];
 let sixthMan1 = { name: "6e Homme J1", defense: 8, rebond: 8, attaque: 8, passe: 7, power: "clutch" };
@@ -35,7 +38,8 @@ let gameState = {
     isGameWinnerPhase: false,
     powersUsed1: {}, powersUsed2: {},
     bannedPlayers1: [], bannedPlayers2: [],
-    activePowers: []
+    activePowers: [],
+    statBoosts: [] // { playerIndex, team, stat, amount }
 };
 
 // ═══════════════════════════════════════════════
@@ -48,7 +52,7 @@ async function loadAllCardsAndCollection() {
 
     if (currentUser) {
         const { data: coll, error: collErr } = await window.mySupabase
-            .from('player_collections').select('roster, owned_cards').eq('user_id', currentUser.id).single();
+            .from('player_collections').select('roster, owned_cards, credits, tokens, xp, pass_level').eq('user_id', currentUser.id).single();
         if (!collErr && coll) {
             ownedCards = coll.owned_cards || [];
             const savedRoster = coll.roster || { starters: [], sixthMan: null };
@@ -58,14 +62,51 @@ async function loadAllCardsAndCollection() {
                 starters: (savedRoster.starters || []).filter(id => id && ownedStrings.includes(String(id))),
                 sixthMan: savedRoster.sixthMan && ownedStrings.includes(String(savedRoster.sixthMan)) ? savedRoster.sixthMan : null
             };
+            playerEconomy = { credits: coll.credits || 0, tokens: coll.tokens || 0, xp: coll.xp || 0, passLevel: coll.pass_level || 0 };
         } else {
             await window.mySupabase.from('player_collections').insert({
                 user_id: currentUser.id, owned_cards: [], roster: { starters: [], sixthMan: null }
             });
             roster = { starters: [], sixthMan: null };
             ownedCards = [];
+            playerEconomy = { credits: 0, tokens: 0, xp: 0, passLevel: 0 };
         }
+        updateCurrencyDisplay();
     }
+}
+
+// ═══════════════════════════════════════════════
+// ÉCONOMIE — CRÉDITS / JETONS / PASS CULTURE
+// ═══════════════════════════════════════════════
+function updateCurrencyDisplay() {
+    document.querySelectorAll('.currency-credits').forEach(el => el.textContent = playerEconomy.credits);
+    document.querySelectorAll('.currency-tokens').forEach(el => el.textContent = playerEconomy.tokens);
+}
+
+async function grantMatchXp(won) {
+    if (!currentUser) return;
+    const { data, error } = await window.mySupabase.rpc('grant_match_xp', { p_won: won });
+    if (error) { console.error('Erreur grant_match_xp:', error); return; }
+    const result = Array.isArray(data) ? data[0] : data;
+    if (!result) return;
+    playerEconomy.xp = result.new_xp;
+    playerEconomy.passLevel = result.new_level;
+    await loadAllCardsAndCollection();
+    const tiers = result.tiers_unlocked || [];
+    if (tiers.length > 0) {
+        const lines = tiers.map(t => {
+            if (t.reward_type === 'credits') return `🪙 Niveau ${t.level} : +${t.reward_amount} crédits`;
+            if (t.reward_type === 'tokens') return `⚡ Niveau ${t.level} : +${t.reward_amount} jetons`;
+            return `📦 Niveau ${t.level} : pack ${t.pack_type} (crédits offerts)`;
+        });
+        await customAlert('🎖️ Pass Culture', lines.join('\n'));
+    }
+}
+
+async function incrementQuestProgress(questType) {
+    if (!currentUser) return;
+    const { error } = await window.mySupabase.rpc('increment_quest_progress', { p_quest_type: questType });
+    if (error) console.error('Erreur increment_quest_progress:', error);
 }
 
 // ═══════════════════════════════════════════════
@@ -76,17 +117,51 @@ function initRealtime(gameId) {
     const channel = window.mySupabase.channel(`game-realtime-${gameId}`);
     channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'games', filter: `id=eq.${gameId}` }, (payload) => {
         const updated = payload.new;
-        if (updated.status === 'in_progress') syncGameStateFromServer(updated);
-        if (updated.player1_roster) { opponentRoster = updated.player1_roster; opponentDeck = opponentRoster.starters.map(id => allCards.find(c => String(c.id) === String(id))).filter(Boolean); sixthMan2 = allCards.find(c => String(c.id) === String(opponentRoster.sixthMan)) || {}; }
-        if (updated.player2_roster) { opponentRoster = updated.player2_roster; opponentDeck = opponentRoster.starters.map(id => allCards.find(c => String(c.id) === String(id))).filter(Boolean); sixthMan2 = allCards.find(c => String(c.id) === String(opponentRoster.sixthMan)) || {}; }
-        if (updated.player1_selection && myPlayerNumber === 2) gameState.team1Selection = updated.player1_selection;
-        if (updated.player2_selection && myPlayerNumber === 1) gameState.team2Selection = updated.player2_selection;
-        gameState.score1 = updated.score1 || gameState.score1;
-        gameState.score2 = updated.score2 || gameState.score2;
-        gameState.round = updated.round || gameState.round;
-        gameState.currentCategory = updated.current_category || gameState.currentCategory;
-        if (gameState.team1Selection.length > 0 && gameState.team2Selection.length > 0) showBattle();
+
+        // ── Réception du roster adverse (envoyé une fois par chacun à la création/jonction) ──
+        const opponentField = myPlayerNumber === 1 ? 'player2_roster' : 'player1_roster';
+        if (updated[opponentField]) {
+            opponentRoster = updated[opponentField];
+            opponentDeck = (opponentRoster.starters || []).map(id => allCards.find(c => String(c.id) === String(id))).filter(Boolean);
+            sixthMan2 = allCards.find(c => String(c.id) === String(opponentRoster.sixthMan)) || {};
+        }
+
+        // ── Démarrage de la partie une fois les deux rosters présents ──
+        if (!gameHasStarted && updated.status === 'in_progress' && updated.player1_roster && updated.player2_roster) {
+            gameHasStarted = true;
+            document.getElementById('waitingRoom').style.display = 'none';
+            document.getElementById('lobbyScreen').classList.remove('show');
+            startGame();
+        }
+
+        // ── Réception de la sélection de joueurs de l'adversaire (joueur 1 déclenche le combat dès que les deux sélections sont prêtes) ──
+        if (myPlayerNumber === 1 && updated.player2_selection) {
+            gameState.team2Selection = updated.player2_selection;
+            const expectedTeam1Length = gameState.isGameWinnerPhase ? 1 : 2;
+            if (gameState.team1Selection.length === expectedTeam1Length && gameState.team2Selection.length > 0) showBattle();
+        }
+        if (myPlayerNumber === 2 && updated.player1_selection) gameState.team1Selection = updated.player1_selection;
+
+        // ── Réception de l'état de manche : catégorie choisie + résultat calculé par joueur 1 ──
+        const gs = updated.game_state || {};
+        if (gs.currentCategory && !gameState.currentCategory) {
+            gameState.currentCategory = gs.currentCategory;
+            applyReceivedCategory();
+        }
+        if (myPlayerNumber === 2 && gs.battleResultId && gs.battleResultId !== lastAppliedBattleId) {
+            lastAppliedBattleId = gs.battleResultId;
+            applyReceivedBattleResult(gs);
+        }
     }).subscribe((status) => console.log("Statut realtime :", status));
+}
+
+// Le joueur 2 met à jour son affichage de catégorie dès qu'il la reçoit (sans la recalculer)
+function applyReceivedCategory() {
+    const categoryMap = { defense: 'defenseBtn', rebond: 'rebondBtn', attaque: 'attaqueBtn', passe: 'passeBtn' };
+    document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('selected'));
+    const btn = document.getElementById(categoryMap[gameState.currentCategory]);
+    if (btn) btn.classList.add('selected');
+    updateConfirmButton();
 }
 
 // ═══════════════════════════════════════════════
@@ -282,26 +357,7 @@ document.getElementById('attaqueBtn').addEventListener('click', () => selectCate
 document.getElementById('passeBtn').addEventListener('click',   () => selectCategory('passe'));
 document.getElementById('confirmBtn').addEventListener('click', confirmSelection);
 
-document.getElementById('playBtn').addEventListener('click', function() {
-    deck1 = roster.starters.map(id => allCards.find(c => String(c.id) === String(id))).filter(Boolean);
-    sixthMan1 = allCards.find(c => String(c.id) === String(roster.sixthMan)) || { name: "6e Homme par défaut", defense: 7, rebond: 7, attaque: 7, passe: 7, power: "clutch", position: "?" };
-    deck2 = deck1.map(card => ({ ...card }));
-    sixthMan2 = { ...sixthMan1 };
-    document.getElementById('mainMenu').style.display = 'none';
-    document.querySelector('.game-container').style.display = 'block';
-    startGame();
-});
-
-function syncGameStateFromServer(serverState) {
-    gameState.status = serverState.status || gameState.status;
-    gameState.currentTurn = serverState.currentTurn;
-    if (gameState.status === 'in_progress') {
-        document.getElementById('waitingRoom').style.display = 'none';
-        startGame();
-    } else if (gameState.status === 'waiting') {
-        document.getElementById('waitingRoom').style.display = 'block';
-    }
-}
+document.getElementById('playBtn').addEventListener('click', findOrCreateOnlineGame);
 
 function startGame() {
     if (isOnlineMode) {
@@ -739,6 +795,15 @@ function selectCategory(category) {
     document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('selected'));
     if (btn) btn.classList.add('selected');
     updateConfirmButton();
+    if (isOnlineMode) pushGameState({ currentCategory: category });
+}
+
+// Fusionne et écrit l'état de manche partagé dans games.game_state (mode online uniquement)
+async function pushGameState(partialState) {
+    if (!isOnlineMode || !currentGameId) return;
+    const { data } = await window.mySupabase.from('games').select('game_state').eq('id', currentGameId).single();
+    const merged = { ...(data?.game_state || {}), ...partialState };
+    await window.mySupabase.from('games').update({ game_state: merged }).eq('id', currentGameId);
 }
 
 function toggleFullscreen() {
@@ -756,15 +821,77 @@ function togglePlayerSelection(index, card) {
         card.classList.remove('selected');
         const powerIcon = card.querySelector('.power-icon');
         if (powerIcon) powerIcon.classList.remove('show');
+        card.querySelector('.boost-btn')?.remove();
     } else {
         if (gameState.selectedPlayers.length >= maxPlayers) return;
         gameState.selectedPlayers.push(index);
         card.classList.add('selected');
         const powerIcon = card.querySelector('.power-icon');
         if (powerIcon && !powerIcon.classList.contains('power-used')) powerIcon.classList.add('show');
+        addBoostButton(card, index, myPlayerNumber);
     }
     updateSelectionCounter();
     updateConfirmButton();
+}
+
+// ── Boost de stats via jetons (uniquement pour la confrontation en cours) ──
+function addBoostButton(card, playerIndex, team) {
+    if (card.querySelector('.boost-btn')) return;
+    const btn = document.createElement('button');
+    btn.className = 'boost-btn';
+    btn.textContent = '⚡';
+    btn.title = 'Booster une stat avec des jetons';
+    btn.addEventListener('click', (e) => { e.stopPropagation(); openBoostModal(playerIndex, team); });
+    card.appendChild(btn);
+}
+
+const BOOST_STAT_LABELS = { attaque: '⚡ Attaque', defense: '🛡️ Défense', passe: '🎯 Passe', rebond: '🏀 Rebond' };
+const BOOST_MAX_PER_CARD = 5;
+
+async function openBoostModal(playerIndex, team) {
+    const deck = team === 1 ? deck1 : deck2;
+    const player = playerIndex === 'sixthman' ? (team === 1 ? sixthMan1 : sixthMan2) : deck[playerIndex];
+    const existing = gameState.statBoosts.find(b => b.team === team && b.playerIndex === playerIndex);
+
+    if (playerEconomy.tokens <= 0) { await customAlert('⚡ Jetons insuffisants', 'Tu n\'as aucun jeton. Gagne-en via le Pass Culture !'); return; }
+
+    const statOptions = Object.entries(BOOST_STAT_LABELS).map(([stat, label]) => {
+        const current = existing && existing.stat === stat ? existing.amount : 0;
+        return { name: `${label} : ${player[stat]}${current ? ' (+' + current + ' actif)' : ''}`, stat };
+    });
+    const statChoice = await customPromptList('⚡ Booster une stat', `${player.name} — choisis la stat à booster (1 jeton = +1, max +${BOOST_MAX_PER_CARD})`, statOptions);
+    if (statChoice === null) return;
+    const chosenStat = statOptions[statChoice].stat;
+
+    const currentAmount = existing && existing.stat === chosenStat ? existing.amount : 0;
+    const maxAffordable = Math.min(BOOST_MAX_PER_CARD - currentAmount, playerEconomy.tokens);
+    if (maxAffordable <= 0) { await customAlert('⚡ Boost au maximum', 'Cette stat est déjà boostée au maximum pour cette carte.'); return; }
+
+    const amountOptions = Array.from({ length: maxAffordable }, (_, i) => ({ name: `+${i + 1} (coût : ${i + 1} jeton${i > 0 ? 's' : ''})`, amount: i + 1 }));
+    const amountChoice = await customPromptList('⚡ Combien de jetons ?', `Jetons disponibles : ${playerEconomy.tokens}`, amountOptions);
+    if (amountChoice === null) return;
+
+    await applyStatBoost(playerIndex, team, chosenStat, currentAmount + amountOptions[amountChoice].amount);
+}
+
+async function applyStatBoost(playerIndex, team, stat, totalAmount) {
+    const clamped = Math.max(0, Math.min(BOOST_MAX_PER_CARD, totalAmount));
+    const existingIdx = gameState.statBoosts.findIndex(b => b.team === team && b.playerIndex === playerIndex);
+    const previousAmount = existingIdx > -1 ? gameState.statBoosts[existingIdx].amount : 0;
+    const delta = clamped - previousAmount;
+    if (delta <= 0) return;
+    if (playerEconomy.tokens < delta) { await customAlert('⚡ Jetons insuffisants', 'Tu n\'as pas assez de jetons pour ce boost.'); return; }
+
+    const { data, error } = await window.mySupabase.rpc('spend_tokens', { p_amount: delta });
+    if (error) { await customAlert('⚡ Erreur', error.message); return; }
+    const result = Array.isArray(data) ? data[0] : data;
+    playerEconomy.tokens = result.new_tokens;
+    updateCurrencyDisplay();
+
+    if (existingIdx > -1) gameState.statBoosts[existingIdx] = { playerIndex, team, stat, amount: clamped };
+    else gameState.statBoosts.push({ playerIndex, team, stat, amount: clamped });
+
+    await customAlert('⚡ Boost appliqué', `+${clamped} en ${BOOST_STAT_LABELS[stat]} pour cette confrontation !`);
 }
 
 function updateSelectionCounter() {
@@ -785,9 +912,10 @@ function updateConfirmButton() {
 }
 
 function toggleSixthManSelection(player, card) {
-    document.querySelectorAll('.player-card').forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll('.player-card').forEach(c => { c.classList.remove('selected'); c.querySelector('.boost-btn')?.remove(); });
     gameState.selectedPlayers = ['sixthman'];
     card.classList.add('selected');
+    addBoostButton(card, 'sixthman', player);
     updateConfirmButton();
 }
 
@@ -796,13 +924,18 @@ async function confirmSelection() {
         const scoreDiff = gameState.score1 - gameState.score2;
         let firstPlayer = scoreDiff === 0 ? 1 : (scoreDiff > 0 ? 1 : 2);
         let secondPlayer = firstPlayer === 1 ? 2 : 1;
+        const mySelection = gameState.selectedPlayers[0] === 'sixthman' ? ['sixthman'] : [...gameState.selectedPlayers];
+        if (myPlayerNumber === 1) { gameState.team1Selection = mySelection; if (mySelection[0] === 'sixthman') gameState.sixthManUsed1 = true; }
+        else { gameState.team2Selection = mySelection; if (mySelection[0] === 'sixthman') gameState.sixthManUsed2 = true; }
+
+        if (isOnlineMode) {
+            const field = myPlayerNumber === 1 ? 'player1_selection' : 'player2_selection';
+            await window.mySupabase.from('games').update({ [field]: mySelection }).eq('id', currentGameId);
+        }
+
         if (gameState.currentTurn === firstPlayer) {
-            if (firstPlayer === myPlayerNumber) { gameState.team1Selection = gameState.selectedPlayers[0] === 'sixthman' ? ['sixthman'] : [...gameState.selectedPlayers]; if (gameState.selectedPlayers[0] === 'sixthman') gameState.sixthManUsed1 = true; }
-            else { gameState.team2Selection = gameState.selectedPlayers[0] === 'sixthman' ? ['sixthman'] : [...gameState.selectedPlayers]; if (gameState.selectedPlayers[0] === 'sixthman') gameState.sixthManUsed2 = true; }
             setTimeout(() => showPlayerSelection(secondPlayer), 300);
-        } else {
-            if (secondPlayer === myPlayerNumber) { gameState.team1Selection = gameState.selectedPlayers[0] === 'sixthman' ? ['sixthman'] : [...gameState.selectedPlayers]; if (gameState.selectedPlayers[0] === 'sixthman') gameState.sixthManUsed1 = true; }
-            else { gameState.team2Selection = gameState.selectedPlayers[0] === 'sixthman' ? ['sixthman'] : [...gameState.selectedPlayers]; if (gameState.selectedPlayers[0] === 'sixthman') gameState.sixthManUsed2 = true; }
+        } else if (myPlayerNumber === 1) {
             showBattle();
         }
         return;
@@ -810,26 +943,19 @@ async function confirmSelection() {
 
     const firstPlayer = getFirstPlayer();
     const secondPlayer = firstPlayer === 1 ? 2 : 1;
-    if (gameState.currentTurn === firstPlayer) {
-        if (firstPlayer === myPlayerNumber) {
-            gameState.team1Selection = gameState.selectedPlayers[0] === 'sixthman' ? ['sixthman'] : [...gameState.selectedPlayers];
-            if (gameState.selectedPlayers[0] === 'sixthman') { if (myPlayerNumber === 1) gameState.sixthManUsed1 = true; else gameState.sixthManUsed2 = true; }
-        }
-        setTimeout(() => showPlayerSelection(secondPlayer), 300);
-    } else {
-        if (secondPlayer === myPlayerNumber) {
-            gameState.team1Selection = gameState.selectedPlayers[0] === 'sixthman' ? ['sixthman'] : [...gameState.selectedPlayers];
-            if (gameState.selectedPlayers[0] === 'sixthman') { if (myPlayerNumber === 1) gameState.sixthManUsed1 = true; else gameState.sixthManUsed2 = true; }
-        } else {
-            gameState.team2Selection = gameState.selectedPlayers[0] === 'sixthman' ? ['sixthman'] : [...gameState.selectedPlayers];
-            if (gameState.selectedPlayers[0] === 'sixthman') { if (myPlayerNumber === 1) gameState.sixthManUsed1 = true; else gameState.sixthManUsed2 = true; }
-        }
-        showBattle();
-    }
+    const mySelection = gameState.selectedPlayers[0] === 'sixthman' ? ['sixthman'] : [...gameState.selectedPlayers];
+    if (myPlayerNumber === 1) { gameState.team1Selection = mySelection; if (mySelection[0] === 'sixthman') gameState.sixthManUsed1 = true; }
+    else { gameState.team2Selection = mySelection; if (mySelection[0] === 'sixthman') gameState.sixthManUsed2 = true; }
 
     if (isOnlineMode) {
         const field = myPlayerNumber === 1 ? 'player1_selection' : 'player2_selection';
-        await window.mySupabase.from('games').update({ [field]: gameState.selectedPlayers }).eq('id', currentGameId);
+        await window.mySupabase.from('games').update({ [field]: mySelection }).eq('id', currentGameId);
+    }
+
+    if (gameState.currentTurn === firstPlayer) {
+        setTimeout(() => showPlayerSelection(secondPlayer), 300);
+    } else if (!isOnlineMode || myPlayerNumber === 1) {
+        showBattle();
     }
 }
 
@@ -895,6 +1021,9 @@ async function showBattle() {
                         if (ap.type === 'defenseur' && (gameState.currentCategory === 'defense' || gameState.currentCategory === 'rebond')) stat += 2;
                     }
                 });
+                gameState.statBoosts.forEach(b => {
+                    if (b.team === 1 && b.playerIndex === item && b.stat === gameState.currentCategory) stat += b.amount;
+                });
                 total1 += stat;
                 const card = renderCard(player, { size: 'small', isSixthMan: item === 'sixthman' });
                 card.classList.add('battle-card');
@@ -919,6 +1048,9 @@ async function showBattle() {
                         if (ap.type === 'defenseur' && (gameState.currentCategory === 'defense' || gameState.currentCategory === 'rebond')) stat += 2;
                     }
                 });
+                gameState.statBoosts.forEach(b => {
+                    if (b.team === 2 && b.playerIndex === item && b.stat === gameState.currentCategory) stat += b.amount;
+                });
                 total2 += stat;
                 const card = renderCard(player, { size: 'small', isSixthMan: item === 'sixthman' });
                 card.classList.add('battle-card');
@@ -936,59 +1068,103 @@ async function showBattle() {
             battle1Total.textContent = total1; battle2Total.textContent = total2;
             battle1Total.classList.add('show'); battle2Total.classList.add('show');
             setTimeout(() => {
-                const diff = total1 - total2;
-                let scoreQT1, scoreQT2;
+                // En ligne, seul le joueur 1 (autorité) calcule le résultat aléatoire de la manche.
+                // Le joueur 2 attend le résultat déjà calculé, reçu via applyReceivedBattleResult().
+                if (isOnlineMode && myPlayerNumber === 2) return;
 
-                if (gameState.isGameWinnerPhase) {
-                    if (diff > 0) { gameState.score1 += 3; scoreQT1 = 3; scoreQT2 = 0; winnerAnnouncement.textContent = `⚡ GAME WINNER JOUEUR 1! (+3 pts)`; winnerAnnouncement.classList.add('player1'); }
-                    else if (diff < 0) { gameState.score2 += 3; scoreQT1 = 0; scoreQT2 = 3; winnerAnnouncement.textContent = `⚡ GAME WINNER JOUEUR 2! (+3 pts)`; winnerAnnouncement.classList.add('player2'); }
-                    else { scoreQT1 = 0; scoreQT2 = 0; winnerAnnouncement.textContent = `🤝 ÉGALITÉ - Aucun point`; }
-                } else {
-                    const teamBalance = detectStrongerTeam();
-                    if (diff === 0) {
-                        if (teamBalance.hasStrongerTeam) { if (teamBalance.strongerTeam === 1) { scoreQT1 = randomInt(26,28); scoreQT2 = scoreQT1 + 1; } else { scoreQT2 = randomInt(26,28); scoreQT1 = scoreQT2 + 1; } }
-                        else { const eq = randomInt(26,30); scoreQT1 = eq; scoreQT2 = eq; }
-                    } else {
-                        const baseQT = randomInt(48,58), absDiff = Math.abs(diff);
-                        let pr = {};
-                        if (!teamBalance.hasStrongerTeam) {
-                            if (absDiff===1) pr={winner:[51,52],loser:[48,49]}; else if (absDiff===2) pr={winner:[52,54],loser:[46,48]}; else if (absDiff===3) pr={winner:[54,56],loser:[44,46]}; else if (absDiff===4) pr={winner:[56,58],loser:[42,44]}; else if (absDiff===5) pr={winner:[58,60],loser:[40,42]}; else pr={winner:[60,63],loser:[37,40]};
-                        } else {
-                            const strongerWins = (diff>0&&teamBalance.strongerTeam===1)||(diff<0&&teamBalance.strongerTeam===2);
-                            if (strongerWins) { if (absDiff===1) pr={winner:[50.5,51],loser:[49,49.5]}; else if (absDiff===2) pr={winner:[51,52],loser:[48,49]}; else if (absDiff===3) pr={winner:[52,53],loser:[47,48]}; else if (absDiff===4) pr={winner:[53,54],loser:[46,47]}; else if (absDiff===5) pr={winner:[54,56],loser:[44,46]}; else pr={winner:[56,58],loser:[42,44]}; }
-                            else { if (absDiff===1) pr={winner:[53,55],loser:[45,47]}; else if (absDiff===2) pr={winner:[55,57],loser:[43,45]}; else if (absDiff===3) pr={winner:[58,60],loser:[40,42]}; else if (absDiff===4) pr={winner:[60,62],loser:[38,40]}; else if (absDiff===5) pr={winner:[62,64],loser:[36,38]}; else pr={winner:[64,67],loser:[33,36]}; }
-                        }
-                        const wp = randomFloat(pr.winner[0],pr.winner[1])/100, lp = randomFloat(pr.loser[0],pr.loser[1])/100;
-                        let t1, t2;
-                        if (diff>0) { t1=baseQT*wp; t2=baseQT*lp; } else { t2=baseQT*wp; t1=baseQT*lp; }
-                        scoreQT1 = Math.round(clamp(t1,15,40)); scoreQT2 = Math.round(clamp(t2,15,40));
-                        if (scoreQT1===scoreQT2&&diff!==0) { if (diff>0) scoreQT1=Math.min(40,scoreQT1+1); else scoreQT2=Math.min(40,scoreQT2+1); }
-                    }
-                    gameState.score1 += scoreQT1; gameState.score2 += scoreQT2;
-                    let displayText = '';
-                    if (scoreQT1>scoreQT2) { displayText=`🏀 QT Joueur 1 (${scoreQT1} - ${scoreQT2})`; winnerAnnouncement.classList.add('player1'); }
-                    else if (scoreQT2>scoreQT1) { displayText=`🏀 QT Joueur 2 (${scoreQT2} - ${scoreQT1})`; winnerAnnouncement.classList.add('player2'); }
-                    else displayText=`🤝 QT Égalité (${scoreQT1} - ${scoreQT2})`;
-                    if (teamBalance.hasStrongerTeam) displayText += ` ⚖️`;
-                    winnerAnnouncement.textContent = displayText;
+                const result = computeBattleResult(total1, total2);
+                applyBattleResult(result, winnerAnnouncement);
+
+                if (isOnlineMode) {
+                    pushGameState({
+                        battleResultId: `${Date.now()}-${Math.random()}`,
+                        battleResult: result,
+                    });
                 }
 
-                document.getElementById('score1').textContent = gameState.score1;
-                document.getElementById('score2').textContent = gameState.score2;
-                winnerAnnouncement.classList.add('show');
-
-                setTimeout(() => {
-                    if (gameState.round === 4 && !gameState.isGameWinnerPhase) {
-                        if (Math.abs(gameState.score1 - gameState.score2) <= 3) startGameWinnerPhase(); else endGame();
-                    } else if (gameState.isGameWinnerPhase) {
-                        endGame();
-                    } else {
-                        nextRound();
-                    }
-                }, 3000);
+                setTimeout(() => advancePhaseAfterBattle(), 3000);
             }, 1000);
         }, 1500);
     }, 500);
+}
+
+// Calcule (de manière non-déterministe) le résultat d'une manche à partir des totaux affichés.
+// Appelé UNIQUEMENT par le joueur 1 en mode online (autorité), ou par le seul joueur en mode local.
+function computeBattleResult(total1, total2) {
+    const diff = total1 - total2;
+    let scoreQT1, scoreQT2;
+
+    if (gameState.isGameWinnerPhase) {
+        if (diff > 0) { scoreQT1 = 3; scoreQT2 = 0; }
+        else if (diff < 0) { scoreQT1 = 0; scoreQT2 = 3; }
+        else { scoreQT1 = 0; scoreQT2 = 0; }
+        return { scoreQT1, scoreQT2, diff, isGameWinnerPhase: true };
+    }
+
+    const teamBalance = detectStrongerTeam();
+    if (diff === 0) {
+        if (teamBalance.hasStrongerTeam) { if (teamBalance.strongerTeam === 1) { scoreQT1 = randomInt(26,28); scoreQT2 = scoreQT1 + 1; } else { scoreQT2 = randomInt(26,28); scoreQT1 = scoreQT2 + 1; } }
+        else { const eq = randomInt(26,30); scoreQT1 = eq; scoreQT2 = eq; }
+    } else {
+        const baseQT = randomInt(48,58), absDiff = Math.abs(diff);
+        let pr = {};
+        if (!teamBalance.hasStrongerTeam) {
+            if (absDiff===1) pr={winner:[51,52],loser:[48,49]}; else if (absDiff===2) pr={winner:[52,54],loser:[46,48]}; else if (absDiff===3) pr={winner:[54,56],loser:[44,46]}; else if (absDiff===4) pr={winner:[56,58],loser:[42,44]}; else if (absDiff===5) pr={winner:[58,60],loser:[40,42]}; else pr={winner:[60,63],loser:[37,40]};
+        } else {
+            const strongerWins = (diff>0&&teamBalance.strongerTeam===1)||(diff<0&&teamBalance.strongerTeam===2);
+            if (strongerWins) { if (absDiff===1) pr={winner:[50.5,51],loser:[49,49.5]}; else if (absDiff===2) pr={winner:[51,52],loser:[48,49]}; else if (absDiff===3) pr={winner:[52,53],loser:[47,48]}; else if (absDiff===4) pr={winner:[53,54],loser:[46,47]}; else if (absDiff===5) pr={winner:[54,56],loser:[44,46]}; else pr={winner:[56,58],loser:[42,44]}; }
+            else { if (absDiff===1) pr={winner:[53,55],loser:[45,47]}; else if (absDiff===2) pr={winner:[55,57],loser:[43,45]}; else if (absDiff===3) pr={winner:[58,60],loser:[40,42]}; else if (absDiff===4) pr={winner:[60,62],loser:[38,40]}; else if (absDiff===5) pr={winner:[62,64],loser:[36,38]}; else pr={winner:[64,67],loser:[33,36]}; }
+        }
+        const wp = randomFloat(pr.winner[0],pr.winner[1])/100, lp = randomFloat(pr.loser[0],pr.loser[1])/100;
+        let t1, t2;
+        if (diff>0) { t1=baseQT*wp; t2=baseQT*lp; } else { t2=baseQT*wp; t1=baseQT*lp; }
+        scoreQT1 = Math.round(clamp(t1,15,40)); scoreQT2 = Math.round(clamp(t2,15,40));
+        if (scoreQT1===scoreQT2&&diff!==0) { if (diff>0) scoreQT1=Math.min(40,scoreQT1+1); else scoreQT2=Math.min(40,scoreQT2+1); }
+    }
+    return { scoreQT1, scoreQT2, diff, isGameWinnerPhase: false, hasStrongerTeam: teamBalance.hasStrongerTeam };
+}
+
+// Applique un résultat de manche (déjà calculé) à l'état du jeu et à l'affichage. Pure côté affichage : aucun aléatoire ici.
+function applyBattleResult(result, winnerAnnouncement) {
+    const { scoreQT1, scoreQT2 } = result;
+    gameState.score1 += scoreQT1; gameState.score2 += scoreQT2;
+
+    if (result.isGameWinnerPhase) {
+        if (scoreQT1 > scoreQT2) { winnerAnnouncement.textContent = `⚡ GAME WINNER JOUEUR 1! (+3 pts)`; winnerAnnouncement.classList.add('player1'); }
+        else if (scoreQT2 > scoreQT1) { winnerAnnouncement.textContent = `⚡ GAME WINNER JOUEUR 2! (+3 pts)`; winnerAnnouncement.classList.add('player2'); }
+        else { winnerAnnouncement.textContent = `🤝 ÉGALITÉ - Aucun point`; }
+    } else {
+        let displayText = '';
+        if (scoreQT1>scoreQT2) { displayText=`🏀 QT Joueur 1 (${scoreQT1} - ${scoreQT2})`; winnerAnnouncement.classList.add('player1'); }
+        else if (scoreQT2>scoreQT1) { displayText=`🏀 QT Joueur 2 (${scoreQT2} - ${scoreQT1})`; winnerAnnouncement.classList.add('player2'); }
+        else displayText=`🤝 QT Égalité (${scoreQT1} - ${scoreQT2})`;
+        if (result.hasStrongerTeam) displayText += ` ⚖️`;
+        winnerAnnouncement.textContent = displayText;
+    }
+
+    document.getElementById('score1').textContent = gameState.score1;
+    document.getElementById('score2').textContent = gameState.score2;
+    winnerAnnouncement.classList.add('show');
+}
+
+// Décide de la transition suivante (manche suivante / Game Winner / fin de partie).
+// Appelé uniquement par l'autorité (joueur 1 en ligne, ou le joueur unique en local).
+function advancePhaseAfterBattle() {
+    if (gameState.round === 4 && !gameState.isGameWinnerPhase) {
+        if (Math.abs(gameState.score1 - gameState.score2) <= 3) startGameWinnerPhase(); else endGame();
+    } else if (gameState.isGameWinnerPhase) {
+        endGame();
+    } else {
+        nextRound();
+    }
+}
+
+// Le joueur 2 reçoit ici le résultat déjà calculé par le joueur 1 et rejoue uniquement l'affichage.
+function applyReceivedBattleResult(gs) {
+    const winnerAnnouncement = document.getElementById('winnerAnnouncement');
+    winnerAnnouncement.classList.remove('show', 'player1', 'player2');
+    applyBattleResult(gs.battleResult, winnerAnnouncement);
+    setTimeout(() => advancePhaseAfterBattle(), 3000);
 }
 
 function nextRound() {
@@ -1004,15 +1180,21 @@ function nextRound() {
             transition.classList.remove('show');
             gameState.team1Selection = []; gameState.team2Selection = [];
             gameState.usedIndicesDeck1 = []; gameState.usedIndicesDeck2 = [];
-            gameState.currentCategory = null; gameState.activePowers = [];
+            gameState.currentCategory = null; gameState.activePowers = []; gameState.statBoosts = [];
             gameState.bannedPlayers1 = []; gameState.bannedPlayers2 = [];
             if (gameState.round === 3) {
-                const categories = ['defense', 'rebond', 'attaque', 'passe'];
-                gameState.currentCategory = categories[Math.floor(Math.random() * categories.length)];
+                gameState.currentCategory = pickRandomCategory();
             }
+            if (isOnlineMode) pushGameState({ currentCategory: gameState.currentCategory, round: gameState.round });
             showPlayerSelection(getFirstPlayer());
         }, 500);
     }, 2000);
+}
+
+// Tirage de catégorie aléatoire — n'est appelé que par l'autorité (joueur 1 en ligne, joueur unique en local)
+function pickRandomCategory() {
+    const categories = ['defense', 'rebond', 'attaque', 'passe'];
+    return categories[Math.floor(Math.random() * categories.length)];
 }
 
 function startGameWinnerPhase() {
@@ -1025,12 +1207,12 @@ function startGameWinnerPhase() {
             transition.classList.remove('show');
             gameState.team1Selection = []; gameState.team2Selection = [];
             gameState.usedIndicesDeck1 = []; gameState.usedIndicesDeck2 = [];
-            gameState.currentCategory = null; gameState.activePowers = [];
+            gameState.currentCategory = null; gameState.activePowers = []; gameState.statBoosts = [];
             gameState.bannedPlayers1 = []; gameState.bannedPlayers2 = [];
             gameState.isGameWinnerPhase = true;
             if (gameState.score1 === gameState.score2) {
-                const categories = ['defense', 'rebond', 'attaque', 'passe'];
-                gameState.currentCategory = categories[Math.floor(Math.random() * categories.length)];
+                gameState.currentCategory = pickRandomCategory();
+                if (isOnlineMode) pushGameState({ currentCategory: gameState.currentCategory });
                 showPlayerSelection(1);
             } else {
                 showPlayerSelection(gameState.score1 > gameState.score2 ? 1 : 2);
@@ -1042,6 +1224,14 @@ function startGameWinnerPhase() {
 function endGameWinner() { endGame(); }
 
 function endGame() {
+    const iWon = (myPlayerNumber === 1 && gameState.score1 > gameState.score2) ||
+                 (myPlayerNumber === 2 && gameState.score2 > gameState.score1);
+    // gameState.score1/score2 sont désormais identiques sur les deux clients (calculés une seule fois
+    // par l'autorité et reçus via applyBattleResult), donc cette comparaison est fiable en ligne aussi.
+    incrementQuestProgress('play_game');
+    if (iWon) incrementQuestProgress('win_game');
+    grantMatchXp(iWon);
+
     const transition = document.getElementById('nextRoundTransition');
     transition.innerHTML = gameState.score1 > gameState.score2
         ? `🏆 VICTOIRE JOUEUR 1!<br><span style="font-size: 48px;">${gameState.score1} - ${gameState.score2}</span>`
@@ -1097,10 +1287,14 @@ document.getElementById('packsBtn').addEventListener('click', () => {
     document.getElementById('packChoiceOverlay').classList.add('show');
 });
 
+const PACK_PRICES = { basic: 100, premium: 250 };
+
 document.querySelectorAll('.pack-option-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         const packType = btn.dataset.packType;
-        customConfirm('Ouvrir un pack', `Ouvrir le ${packType === 'basic' ? 'Pack Basique' : 'Pack Premium'} ?`).then(confirmed => {
+        const price = PACK_PRICES[packType];
+        const label = packType === 'basic' ? 'Pack Basique' : 'Pack Premium';
+        customConfirm('Ouvrir un pack', `Ouvrir le ${label} pour ${price} crédits ?`).then(confirmed => {
             if (confirmed) { document.getElementById('packChoiceOverlay').classList.remove('show'); openPack(packType); }
         });
     });
@@ -1108,6 +1302,15 @@ document.querySelectorAll('.pack-option-btn').forEach(btn => {
 
 async function openPack(packType) {
     if (!allCards.length) { await customAlert('Erreur', 'Les cartes ne sont pas chargées.'); return; }
+
+    const { data: spendData, error: spendError } = await window.mySupabase.rpc('spend_credits_for_pack', { p_pack_type: packType });
+    if (spendError) {
+        await customAlert('💰 Crédits insuffisants', `Tu n'as pas assez de crédits pour ouvrir ce pack.\nRends-toi à la Boutique ou au Pass Culture pour en gagner.`);
+        return;
+    }
+    const spendResult = Array.isArray(spendData) ? spendData[0] : spendData;
+    playerEconomy.credits = spendResult.new_credits;
+    updateCurrencyDisplay();
 
     // ── 1. TIRAGE DES 3 CARTES ──────────────────────────────
     const drawnCards = weightedDraw(allCards, 3);
@@ -1306,6 +1509,7 @@ window.savePackCards = async function() {
         if (error) throw error;
 
         console.log('✅ Cartes enregistrées via RPC !');
+        incrementQuestProgress('open_pack');
         await loadAllCardsAndCollection();
         overlay?.remove();
 
@@ -1335,10 +1539,215 @@ window.closePackReveal = function() {
 };
 
 // ═══════════════════════════════════════════════
+// BOUTIQUE
+// ═══════════════════════════════════════════════
+function renderShop() {
+    const grid = document.getElementById('shopPacksGrid');
+    grid.innerHTML = '';
+    const packs = [
+        { type: 'basic', label: 'Pack Basique', desc: '3 cartes', price: PACK_PRICES.basic },
+        { type: 'premium', label: 'Pack Premium', desc: '5 cartes', price: PACK_PRICES.premium },
+    ];
+    packs.forEach(pack => {
+        const card = document.createElement('div');
+        card.className = 'shop-pack-card';
+        const canAfford = playerEconomy.credits >= pack.price;
+        card.innerHTML = `
+            <div class="shop-pack-title">📦 ${pack.label}</div>
+            <div class="shop-pack-desc">${pack.desc}</div>
+            <div class="shop-pack-price">🪙 ${pack.price}</div>
+            <button class="shop-pack-buy-btn" ${canAfford ? '' : 'disabled'}>${canAfford ? 'Acheter' : 'Crédits insuffisants'}</button>
+        `;
+        card.querySelector('.shop-pack-buy-btn').addEventListener('click', async () => {
+            const confirmed = await customConfirm('Ouvrir un pack', `Ouvrir le ${pack.label} pour ${pack.price} crédits ?`);
+            if (confirmed) { document.getElementById('shopPage').classList.remove('show'); await openPack(pack.type); }
+        });
+        grid.appendChild(card);
+    });
+}
+
+document.getElementById('shopBtn').addEventListener('click', () => {
+    document.getElementById('mainMenu').style.display = 'none';
+    document.getElementById('shopPage').classList.add('show');
+    renderShop();
+});
+document.getElementById('shopBackBtn').addEventListener('click', () => {
+    document.getElementById('shopPage').classList.remove('show');
+    document.getElementById('mainMenu').style.display = 'flex';
+});
+
+// ═══════════════════════════════════════════════
+// PASS CULTURE
+// ═══════════════════════════════════════════════
+const PASS_TIERS = [
+    { level: 1,  xpRequired: 100,  rewardType: 'credits', rewardAmount: 50  },
+    { level: 2,  xpRequired: 200,  rewardType: 'tokens',  rewardAmount: 15  },
+    { level: 3,  xpRequired: 300,  rewardType: 'credits', rewardAmount: 75  },
+    { level: 4,  xpRequired: 400,  rewardType: 'tokens',  rewardAmount: 20  },
+    { level: 5,  xpRequired: 500,  rewardType: 'pack',    rewardAmount: 1, packType: 'basic' },
+    { level: 6,  xpRequired: 600,  rewardType: 'credits', rewardAmount: 80  },
+    { level: 7,  xpRequired: 700,  rewardType: 'tokens',  rewardAmount: 20  },
+    { level: 8,  xpRequired: 800,  rewardType: 'credits', rewardAmount: 90  },
+    { level: 9,  xpRequired: 900,  rewardType: 'tokens',  rewardAmount: 25  },
+    { level: 10, xpRequired: 1000, rewardType: 'pack',    rewardAmount: 1, packType: 'basic' },
+    { level: 11, xpRequired: 1100, rewardType: 'credits', rewardAmount: 100 },
+    { level: 12, xpRequired: 1200, rewardType: 'tokens',  rewardAmount: 25  },
+    { level: 13, xpRequired: 1300, rewardType: 'credits', rewardAmount: 110 },
+    { level: 14, xpRequired: 1400, rewardType: 'tokens',  rewardAmount: 30  },
+    { level: 15, xpRequired: 1500, rewardType: 'pack',    rewardAmount: 1, packType: 'premium' },
+    { level: 16, xpRequired: 1600, rewardType: 'credits', rewardAmount: 120 },
+    { level: 17, xpRequired: 1700, rewardType: 'tokens',  rewardAmount: 30  },
+    { level: 18, xpRequired: 1800, rewardType: 'credits', rewardAmount: 130 },
+    { level: 19, xpRequired: 1900, rewardType: 'tokens',  rewardAmount: 30  },
+    { level: 20, xpRequired: 2000, rewardType: 'pack',    rewardAmount: 1, packType: 'premium' },
+];
+const DAILY_LOGIN_REWARDS = [5, 5, 10, 10, 15, 15, 25];
+
+function tierRewardEmoji(t) {
+    if (t.rewardType === 'credits') return `🪙 +${t.rewardAmount}`;
+    if (t.rewardType === 'tokens') return `⚡ +${t.rewardAmount}`;
+    return `📦 ${t.packType === 'premium' ? 'Premium' : 'Basique'}`;
+}
+
+function renderPassLevelBar() {
+    const container = document.getElementById('passLevelBar');
+    const currentTier = PASS_TIERS.find(t => t.level === playerEconomy.passLevel + 1);
+    const xpForCurrentLevel = playerEconomy.passLevel > 0 ? PASS_TIERS[playerEconomy.passLevel - 1].xpRequired : 0;
+    const xpForNextLevel = currentTier ? currentTier.xpRequired : xpForCurrentLevel;
+    const span = Math.max(1, xpForNextLevel - xpForCurrentLevel);
+    const pct = currentTier ? clamp(((playerEconomy.xp - xpForCurrentLevel) / span) * 100, 0, 100) : 100;
+    container.innerHTML = `
+        <div class="pass-level-label">Niveau ${playerEconomy.passLevel}</div>
+        <div class="pass-xp-track"><div class="pass-xp-fill" style="width:${pct}%"></div></div>
+        <div class="pass-xp-text">${playerEconomy.xp} XP${currentTier ? ` / ${currentTier.xpRequired} XP pour le niveau ${currentTier.level}` : ' (niveau max atteint)'}</div>
+    `;
+}
+
+function renderPassTiers() {
+    const row = document.getElementById('passTiersRow');
+    row.innerHTML = '';
+    PASS_TIERS.forEach(t => {
+        const reached = playerEconomy.passLevel >= t.level;
+        const div = document.createElement('div');
+        div.className = 'pass-tier ' + (reached ? 'claimed' : 'locked');
+        div.innerHTML = `
+            <div class="pass-tier-level">Niv. ${t.level}</div>
+            <div class="pass-tier-reward">${tierRewardEmoji(t)}</div>
+            <button class="pass-tier-claim-btn" disabled>${reached ? '✓ Obtenu' : '🔒 Verrouillé'}</button>
+        `;
+        row.appendChild(div);
+    });
+}
+
+async function renderDailyLogin() {
+    const row = document.getElementById('dailyLoginRow');
+    const { data: loginData } = await window.mySupabase.from('player_daily_login').select('last_claim_date, streak_day').eq('user_id', currentUser.id).maybeSingle();
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const alreadyClaimedToday = loginData && loginData.last_claim_date === todayStr;
+    const currentStreak = loginData ? loginData.streak_day : 0;
+    const nextDay = alreadyClaimedToday ? currentStreak : (currentStreak % 7) + 1;
+
+    row.innerHTML = '';
+    for (let day = 1; day <= 7; day++) {
+        const div = document.createElement('div');
+        const isToday = day === nextDay && !alreadyClaimedToday;
+        const isPast = alreadyClaimedToday ? day <= currentStreak : day < nextDay;
+        div.className = 'daily-login-day' + (isToday ? ' current' : '') + (isPast ? ' past' : '');
+        div.innerHTML = `<div class="daily-login-day-label">Jour ${day}</div><div class="daily-login-day-reward">⚡${DAILY_LOGIN_REWARDS[day - 1]}</div>`;
+        row.appendChild(div);
+    }
+
+    let claimBtn = document.getElementById('dailyLoginClaimBtn');
+    if (!claimBtn) {
+        claimBtn = document.createElement('button');
+        claimBtn.id = 'dailyLoginClaimBtn';
+        claimBtn.className = 'daily-login-claim-btn';
+        row.parentElement.appendChild(claimBtn);
+    }
+    claimBtn.disabled = alreadyClaimedToday;
+    claimBtn.textContent = alreadyClaimedToday ? '✓ Déjà réclamé aujourd\'hui' : '🎁 Réclamer';
+    claimBtn.onclick = async () => {
+        const { data, error } = await window.mySupabase.rpc('claim_daily_login');
+        if (error) { await customAlert('Erreur', error.message); return; }
+        const result = Array.isArray(data) ? data[0] : data;
+        playerEconomy.tokens += result.tokens_gained;
+        updateCurrencyDisplay();
+        await customAlert('🎁 Connexion quotidienne', `+${result.tokens_gained} jetons (jour ${result.streak_day}/7) !`);
+        renderDailyLogin();
+    };
+}
+
+async function renderDailyQuests() {
+    const list = document.getElementById('dailyQuestsList');
+    const { data: quests, error } = await window.mySupabase.rpc('get_or_create_daily_quests');
+    if (error) { console.error('Erreur get_or_create_daily_quests:', error); list.innerHTML = ''; return; }
+    list.innerHTML = '';
+    (quests || []).forEach(q => {
+        const done = q.progress >= q.target_count;
+        const div = document.createElement('div');
+        div.className = 'quest-item' + (q.claimed ? ' done' : '');
+        const rewardText = [q.xp_reward ? `+${q.xp_reward} XP` : null, q.tokens_reward ? `+${q.tokens_reward}⚡` : null].filter(Boolean).join(' / ');
+        div.innerHTML = `
+            <div>
+                <div class="quest-label">${q.label}</div>
+                <div class="quest-progress">${Math.min(q.progress, q.target_count)}/${q.target_count} — ${rewardText}</div>
+            </div>
+            <button class="quest-claim-btn" ${(!done || q.claimed) ? 'disabled' : ''}>${q.claimed ? '✓ Réclamé' : 'Réclamer'}</button>
+        `;
+        if (done && !q.claimed) {
+            div.querySelector('.quest-claim-btn').addEventListener('click', async () => {
+                const { data, error: claimErr } = await window.mySupabase.rpc('claim_daily_quest', { p_quest_id: q.quest_id });
+                if (claimErr) { await customAlert('Erreur', claimErr.message); return; }
+                const result = Array.isArray(data) ? data[0] : data;
+                playerEconomy.xp += result.xp_gained;
+                playerEconomy.tokens += result.tokens_gained;
+                updateCurrencyDisplay();
+                renderPassLevelBar();
+                renderPassTiers();
+                renderDailyQuests();
+            });
+        }
+        list.appendChild(div);
+    });
+}
+
+function renderPassPage() {
+    renderPassLevelBar();
+    renderPassTiers();
+    renderDailyLogin();
+    renderDailyQuests();
+}
+
+document.getElementById('passBtn').addEventListener('click', () => {
+    document.getElementById('mainMenu').style.display = 'none';
+    document.getElementById('passPage').classList.add('show');
+    renderPassPage();
+});
+document.getElementById('passBackBtn').addEventListener('click', () => {
+    document.getElementById('passPage').classList.remove('show');
+    document.getElementById('mainMenu').style.display = 'flex';
+});
+
+// ═══════════════════════════════════════════════
 // VESTIAIRE
 // ═══════════════════════════════════════════════
 function getPowerColor(power) { const colors = {'Rim Runner':'#e8832a','Vision':'#2980b9','Handle':'#8e44ad','Guerrier':'#c0392b','Block':'#27ae60','3pts':'#f1c40f','Lockdown':'#16a085','Steal':'#d35400','Mid-Range':'#7f8c8d','Clutch':'#e74c3c','Catch&shoot':'#2ecc71','Versatile':'#3498db','Dunk':'#e91e63','Microwave':'#ff9800'}; return colors[power] || '#888'; }
 function getPowerLabel(power) { return power || ''; }
+
+// Postes des 5 slots starter (ordre fixe) et éligibilité depuis le poste réel en base
+const STARTER_POSITIONS = ['PG', 'SG', 'SF', 'PF', 'C'];
+
+// Le champ Position en base ne contient que G / F / C / G-F (pas le détail PG/SG/SF/PF)
+// → un G peut tenir PG ou SG, un F peut tenir SF ou PF, un G-F est polyvalent, un C reste C.
+function isPlayerEligibleForSlot(player, slotPosition) {
+    const raw = (player && player.Position) ? String(player.Position).toUpperCase() : '';
+    if (!raw) return true; // poste inconnu → ne pas bloquer l'assignation
+    if (raw === 'G-F') return true;
+    if (raw === 'G') return slotPosition === 'PG' || slotPosition === 'SG';
+    if (raw === 'F') return slotPosition === 'SF' || slotPosition === 'PF';
+    if (raw === 'C') return slotPosition === 'C';
+    return true;
+}
 
 function renderEffectif() {
     const slotsContainer = document.getElementById('effectifSlots');
@@ -1361,7 +1770,7 @@ function renderEffectif() {
 
         const label = document.createElement('span');
         label.className = 'slot-label';
-        label.textContent = `Starter ${slotIdx + 1}`;
+        label.textContent = STARTER_POSITIONS[slotIdx];
         slot.appendChild(label);
 
         if (player) {
@@ -1420,7 +1829,7 @@ function renderEffectif() {
         });
     });
 
-    // ── Ma Collection (liste scrollable) ──────────────────
+    // ── Ma Collection (grille filtrable) ──────────────────
     if (!ownedList) return;
 
     if (ownedCards.length === 0) {
@@ -1431,24 +1840,60 @@ function renderEffectif() {
 
     if (countEl) countEl.textContent = `(${ownedCards.length} carte${ownedCards.length > 1 ? 's' : ''})`;
 
+    populateCollectionFilterOptions();
+    renderOwnedCollectionGrid();
+}
+
+function populateCollectionFilterOptions() {
+    const teamFilter = document.getElementById('collectionTeamFilter');
+    if (!teamFilter || teamFilter.dataset.populated === '1') return;
+    const ownedStrings = ownedCards.map(String);
+    const teams = [...new Set(
+        allCards.filter(c => ownedStrings.includes(String(c.id))).map(c => c.team).filter(Boolean)
+    )].sort();
+    teams.forEach(team => {
+        const opt = document.createElement('option');
+        opt.value = team;
+        opt.textContent = team;
+        teamFilter.appendChild(opt);
+    });
+    teamFilter.dataset.populated = '1';
+}
+
+function renderOwnedCollectionGrid() {
+    const ownedList = document.getElementById('ownedCardsList');
+    if (!ownedList) return;
+    ownedList.innerHTML = '';
+
+    const search = (document.getElementById('collectionSearch')?.value || '').trim().toLowerCase();
+    const teamF = document.getElementById('collectionTeamFilter')?.value || '';
+    const posF = document.getElementById('collectionPositionFilter')?.value || '';
+
+    const ownedStrings = ownedCards.map(String);
+    let players = allCards.filter(c => ownedStrings.includes(String(c.id)));
+    if (search) players = players.filter(p => p.name && p.name.toLowerCase().includes(search));
+    if (teamF) players = players.filter(p => p.team === teamF);
+    if (posF) players = players.filter(p => isPlayerEligibleForSlot(p, posF));
+
+    if (players.length === 0) {
+        ownedList.innerHTML = '<div style="text-align:center; color:rgba(255,255,255,0.3); padding:30px; font-size:14px;">Aucun joueur ne correspond à ces filtres.</div>';
+        return;
+    }
+
     // Grouper par équipe
     const byTeam = {};
-    ownedCards.forEach(id => {
-        const p = allCards.find(c => String(c.id) === String(id));
-        if (!p) return;
+    players.forEach(p => {
         const team = p.team || 'Autres';
         if (!byTeam[team]) byTeam[team] = [];
         byTeam[team].push(p);
     });
 
     Object.keys(byTeam).sort().forEach(team => {
-        // En-tête équipe
         const teamHeader = document.createElement('div');
         teamHeader.className = 'owned-team-header';
         teamHeader.textContent = team;
         ownedList.appendChild(teamHeader);
 
-        // Grille cartes
         const row = document.createElement('div');
         row.className = 'owned-cards-row';
         ownedList.appendChild(row);
@@ -1465,19 +1910,19 @@ function renderEffectif() {
             const btns = document.createElement('div');
             btns.className = 'owned-card-btns';
 
-            // Starter : dropdown
+            // Starter : dropdown par poste
             const sel = document.createElement('select');
             sel.className = 'assign-select';
-            sel.innerHTML = '<option value="">+ Starter</option>';
-            for (let i = 0; i < 5; i++) {
+            sel.innerHTML = '<option value="">+ Poste</option>';
+            STARTER_POSITIONS.forEach((pos, i) => {
                 const opt = document.createElement('option');
                 opt.value = i;
                 const currentId = roster.starters[i];
                 const isThis = currentId && String(currentId) === String(player.id);
-                opt.textContent = isThis ? `✓ Starter ${i+1}` : `Starter ${i+1}`;
+                opt.textContent = isThis ? `✓ ${pos}` : pos;
                 if (isThis) opt.selected = true;
                 sel.appendChild(opt);
-            }
+            });
             sel.addEventListener('change', async function() {
                 const slotIdx = parseInt(this.value);
                 if (isNaN(slotIdx)) return;
@@ -1521,14 +1966,16 @@ async function saveRoster() {
 let swapTarget = null;
 function openSwapModal(slotType, slotIndex) {
     swapTarget = { slot: slotType, index: slotIndex };
-    document.getElementById('swapModalTitle').textContent = slotType === 'starter' ? `Choisir un remplaçant pour Starter ${slotIndex + 1}` : 'Choisir un nouveau 6e Homme';
+    document.getElementById('swapModalTitle').textContent = slotType === 'starter' ? `Choisir un joueur pour le poste ${STARTER_POSITIONS[slotIndex]}` : 'Choisir un nouveau 6e Homme';
     const grid = document.getElementById('swapCardsGrid');
     grid.innerHTML = '';
+    const slotPosition = slotType === 'starter' ? STARTER_POSITIONS[slotIndex] : null;
     ownedCards.forEach(playerId => {
         // Comparaison tolérante : bigint vs string
         const player = allCards.find(c => String(c.id) === String(playerId));
         if (!player) return;
         const isInRoster = roster.starters.map(String).includes(String(playerId)) || String(roster.sixthMan) === String(playerId);
+        const isOffPosition = slotPosition ? !isPlayerEligibleForSlot(player, slotPosition) : false;
         const card = renderCard(player, { size: 'small' });
         card.classList.toggle('in-roster', isInRoster);
         card.style.opacity = isInRoster ? '0.5' : '1';
@@ -1537,6 +1984,11 @@ function openSwapModal(slotType, slotIndex) {
             const badge = document.createElement('div');
             badge.textContent = '★ Effectif';
             badge.style.cssText = 'position:absolute;top:4px;left:50%;transform:translateX(-50%);background:#ffd700;color:#000;font-size:9px;font-weight:bold;padding:1px 6px;border-radius:3px;z-index:10;white-space:nowrap;';
+            card.appendChild(badge);
+        } else if (isOffPosition) {
+            const badge = document.createElement('div');
+            badge.textContent = `⚠ Hors poste (${player.Position || '?'})`;
+            badge.style.cssText = 'position:absolute;top:4px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,0.12);color:#f0b429;font-size:8px;font-weight:bold;padding:1px 6px;border-radius:3px;z-index:10;white-space:nowrap;';
             card.appendChild(badge);
         }
         if (!isInRoster) card.addEventListener('click', () => swapPlayer(playerId));
@@ -1562,7 +2014,7 @@ let binderPages = [], binderCurrentPage = 0, binderIsAnimating = false;
 
 function buildBinderPages() {
     binderPages = [];
-    const CARDS_PER_PAGE = 4;
+    const CARDS_PER_PAGE = 6;
 
     // Récupérer toutes les équipes depuis allCards (pas juste ownedCards)
     const teams = [...new Set(allCards.map(c => c.team).filter(Boolean))].sort();
@@ -1588,74 +2040,116 @@ function buildBinderPages() {
 }
 
 
+const BINDER_CARD_BASE_W = 260, BINDER_CARD_BASE_H = 385; // dimensions natives de renderCard({size:'large'})
+
+// Calcule le scale qui fait rentrer une grille 3 colonnes x 2 lignes de cartes
+// dans l'espace réellement disponible (mesuré après rendu), pour ne jamais rogner le bas des cartes.
+function fitBinderGrid(gridEl) {
+    const cols = 3, rows = 2, gap = 10;
+    const availW = gridEl.clientWidth, availH = gridEl.clientHeight;
+    if (!availW || !availH) return;
+    const cellW = (availW - gap * (cols - 1)) / cols;
+    const cellH = (availH - gap * (rows - 1)) / rows;
+    const scale = Math.min(cellW / BINDER_CARD_BASE_W, cellH / BINDER_CARD_BASE_H, 1);
+    gridEl.querySelectorAll('.binder-card-slot').forEach(slot => {
+        slot.style.width = `${BINDER_CARD_BASE_W * scale}px`;
+        slot.style.height = `${BINDER_CARD_BASE_H * scale}px`;
+        const card = slot.querySelector('.player-card');
+        if (card) card.style.transform = `scale(${scale})`;
+    });
+}
+
 function renderPageContent(pageIndex) {
+    if (pageIndex === -1) {
+        const cover = document.createElement('div');
+        cover.className = 'page-content';
+        cover.style.cssText = 'align-items:center;justify-content:center;text-align:center;';
+        cover.innerHTML = `
+            <div style="font-size:42px;margin-bottom:14px;">🏀</div>
+            <div style="font-family:var(--font-display);font-size:18px;letter-spacing:4px;text-transform:uppercase;color:#1e3c72;">Collection</div>
+            <div style="font-size:11px;color:rgba(30,60,114,0.5);letter-spacing:2px;margin-top:6px;">REBOUND</div>
+        `;
+        return cover;
+    }
     if (pageIndex < 0 || pageIndex >= binderPages.length) {
-        return '<div class="page-content" style="background:transparent;"></div>';
+        const empty = document.createElement('div');
+        empty.className = 'page-content';
+        empty.style.background = 'transparent';
+        return empty;
     }
     const page = binderPages[pageIndex];
     if (page.isSeparator) {
-        return '<div class="page-content" style="display:flex;align-items:center;justify-content:center;"><div style="color:#1e3c72;font-size:12px;opacity:0.4;font-style:italic;">—</div></div>';
+        const sep = document.createElement('div');
+        sep.className = 'page-content';
+        sep.style.cssText = 'display:flex;align-items:center;justify-content:center;';
+        sep.innerHTML = '<div style="color:#1e3c72;font-size:12px;opacity:0.4;font-style:italic;">—</div>';
+        return sep;
     }
 
     const ownedS = page.ownedStrings || [];
-    let cardsHTML = '';
+
+    const content = document.createElement('div');
+    content.className = 'page-content';
+
+    const title = document.createElement('div');
+    title.className = 'page-title';
+    title.innerHTML = `${page.title} <span style="font-size:9px;color:rgba(30,60,114,0.5);margin-left:6px;">${page.subtitle || ''}</span>`;
+    content.appendChild(title);
+
+    const grid = document.createElement('div');
+    grid.className = 'page-cards-grid';
 
     page.cards.forEach(player => {
         const isOwned = ownedS.includes(String(player.id));
         const isInRoster = (roster.starters || []).map(String).includes(String(player.id))
             || String(roster.sixthMan) === String(player.id);
 
-        if (isOwned) {
-            // Carte possédée — affichage normal style binder
-            cardsHTML += `
-            <div class="binder-card">
-                ${isInRoster ? '<div class="col-in-roster">★</div>' : ''}
-                <img src="${player.image_url || ''}" alt="${player.name}"
-                     style="width:100%;height:70px;object-fit:cover;object-position:top center;border-radius:4px;margin-bottom:4px;"
-                     onerror="this.style.display='none'">
-                <div class="col-name">${player.name}</div>
-                <div class="col-stats" style="font-size:8px;color:#555;line-height:1.5;">
-                    <span style="color:#e63329">●${player.attaque}</span>
-                    <span style="color:#00b8d9">●${player.defense}</span>
-                    <span style="color:#6abf45">●${player.passe}</span>
-                    <span style="color:#f0b429">●${player.rebond}</span>
-                </div>
-            </div>`;
-        } else {
-            // Carte manquante — silhouette
-            cardsHTML += `
-            <div class="binder-card binder-card-missing">
-                <div style="width:100%;height:70px;background:#e8e4dc;border-radius:4px;margin-bottom:4px;display:flex;align-items:center;justify-content:center;font-size:24px;color:rgba(30,60,114,0.15);">?</div>
-                <div class="col-name" style="color:rgba(30,60,114,0.3);">${player.name}</div>
-                <div style="font-size:8px;color:rgba(30,60,114,0.2);">Non possédée</div>
-            </div>`;
+        const slot = document.createElement('div');
+        slot.className = 'binder-card-slot' + (isOwned ? '' : ' missing');
+
+        const cardEl = renderCard(player, { size: 'large' });
+        cardEl.style.cursor = 'default';
+        cardEl.style.transformOrigin = 'top left';
+        slot.appendChild(cardEl);
+
+        if (isOwned && isInRoster) {
+            const badge = document.createElement('div');
+            badge.className = 'col-in-roster';
+            badge.textContent = '★';
+            slot.appendChild(badge);
         }
+
+        grid.appendChild(slot);
     });
+    content.appendChild(grid);
 
-    // Compteur possédées/total
-    const owned = page.cards.filter(p => ownedS.includes(String(p.id))).length;
-    const total = page.cards.length;
-
-    return `<div class="page-content">
-        <div class="page-title">
-            ${page.title}
-            <span style="font-size:9px;color:rgba(30,60,114,0.5);margin-left:6px;">${page.subtitle || ''}</span>
-        </div>
-        <div class="page-cards-grid">${cardsHTML}</div>
-    </div>`;
+    return content;
 }
 
 
 function renderBinder() {
     const leftIdx = binderCurrentPage * 2 - 1, rightIdx = binderCurrentPage * 2;
-    document.getElementById('pageLeft').innerHTML = renderPageContent(leftIdx);
-    document.getElementById('pageRight').innerHTML = renderPageContent(rightIdx);
-    if (leftIdx >= 0 && leftIdx < binderPages.length) document.getElementById('pageLeft').innerHTML += `<div class="page-number left">${leftIdx + 1}</div>`;
-    if (rightIdx >= 0 && rightIdx < binderPages.length) document.getElementById('pageRight').innerHTML += `<div class="page-number right">${rightIdx + 1}</div>`;
+    const pageLeftEl = document.getElementById('pageLeft'), pageRightEl = document.getElementById('pageRight');
+    pageLeftEl.replaceChildren(renderPageContent(leftIdx));
+    pageRightEl.replaceChildren(renderPageContent(rightIdx));
+    if (leftIdx >= 0 && leftIdx < binderPages.length) {
+        const num = document.createElement('div'); num.className = 'page-number left'; num.textContent = leftIdx + 1;
+        pageLeftEl.appendChild(num);
+    }
+    if (rightIdx >= 0 && rightIdx < binderPages.length) {
+        const num = document.createElement('div'); num.className = 'page-number right'; num.textContent = rightIdx + 1;
+        pageRightEl.appendChild(num);
+    }
     const totalSpreads = Math.ceil(binderPages.length / 2);
     document.getElementById('binderPrev').disabled = binderCurrentPage <= 0;
     document.getElementById('binderNext').disabled = binderCurrentPage >= totalSpreads - 1;
     document.getElementById('binderIndicator').textContent = `Spread ${binderCurrentPage + 1} / ${totalSpreads}`;
+    requestAnimationFrame(() => {
+        [pageLeftEl, pageRightEl].forEach(el => {
+            const grid = el.querySelector('.page-cards-grid');
+            if (grid) fitBinderGrid(grid);
+        });
+    });
 }
 
 function flipPageForward() {
@@ -1664,10 +2158,16 @@ function flipPageForward() {
     if (binderCurrentPage >= totalSpreads - 1) return;
     binderIsAnimating = true;
     const turning = document.getElementById('pageTurning'), turningFront = document.getElementById('turningFront'), turningBack = document.getElementById('turningBack');
-    turning.className = 'page-turning from-right';
-    turningFront.innerHTML = renderPageContent(binderCurrentPage * 2);
-    turningBack.innerHTML = renderPageContent(binderCurrentPage * 2 + 1);
+    turning.className = 'page-turning from-right animating';
+    turningFront.replaceChildren(renderPageContent(binderCurrentPage * 2));
+    turningBack.replaceChildren(renderPageContent(binderCurrentPage * 2 + 1));
     turningBack.style.transform = 'rotateY(180deg) scaleX(-1)';
+    requestAnimationFrame(() => {
+        [turningFront, turningBack].forEach(el => {
+            const grid = el.querySelector('.page-cards-grid');
+            if (grid) fitBinderGrid(grid);
+        });
+    });
     void turning.offsetWidth;
     turning.classList.add('flip-left');
     turning.addEventListener('transitionend', function handler() {
@@ -1684,11 +2184,17 @@ function flipPageBackward() {
     if (binderCurrentPage <= 0) return;
     binderIsAnimating = true;
     const turning = document.getElementById('pageTurning'), turningFront = document.getElementById('turningFront'), turningBack = document.getElementById('turningBack');
-    turning.className = 'page-turning from-left';
+    turning.className = 'page-turning from-left animating';
     turning.style.transform = 'rotateY(180deg)';
-    turningFront.innerHTML = renderPageContent(binderCurrentPage * 2 - 1);
-    turningBack.innerHTML = renderPageContent(binderCurrentPage * 2 - 2);
+    turningFront.replaceChildren(renderPageContent(binderCurrentPage * 2 - 1));
+    turningBack.replaceChildren(renderPageContent(binderCurrentPage * 2 - 2));
     turningBack.style.transform = 'rotateY(180deg) scaleX(-1)';
+    requestAnimationFrame(() => {
+        [turningFront, turningBack].forEach(el => {
+            const grid = el.querySelector('.page-cards-grid');
+            if (grid) fitBinderGrid(grid);
+        });
+    });
     void turning.offsetWidth;
     turning.style.transform = 'rotateY(0deg)';
     turning.addEventListener('transitionend', function handler() {
@@ -1721,6 +2227,12 @@ document.getElementById('tabCollection').addEventListener('click', function() { 
 document.getElementById('binderPrev').addEventListener('click', flipPageBackward);
 document.getElementById('binderNext').addEventListener('click', flipPageForward);
 document.getElementById('swapModalClose').addEventListener('click', function() { document.getElementById('swapModal').classList.remove('show'); swapTarget = null; });
+document.getElementById('collectionSearch').addEventListener('input', renderOwnedCollectionGrid);
+document.getElementById('collectionTeamFilter').addEventListener('change', renderOwnedCollectionGrid);
+document.getElementById('collectionPositionFilter').addEventListener('change', renderOwnedCollectionGrid);
+window.addEventListener('resize', () => {
+    if (document.getElementById('collectionContainer').classList.contains('show')) renderBinder();
+});
 
 // ═══════════════════════════════════════════════
 // AUTH & LOBBY
@@ -1785,15 +2297,68 @@ async function loadGames() {
     });
 }
 
+// Clic sur "JOUER" : cherche une partie en attente créée par quelqu'un d'autre et la rejoint
+// automatiquement ; sinon en crée une et affiche l'écran d'attente (file d'attente façon matchmaking).
+async function findOrCreateOnlineGame() {
+    if (!currentUser) { await customAlert('Connexion requise', 'Tu dois être connecté pour jouer en ligne.'); return; }
+
+    document.getElementById('mainMenu').style.display = 'none';
+    document.getElementById('lobbyScreen').classList.add('show');
+    document.getElementById('lobbyContent').style.display = 'none';
+    document.getElementById('waitingRoom').style.display = 'block';
+    document.querySelector('.waiting-msg').textContent = '⏳ Recherche d\'un adversaire...';
+
+    const { data: waitingGames, error } = await window.mySupabase
+        .from('games')
+        .select('id, player1_id')
+        .eq('status', 'waiting')
+        .neq('player1_id', currentUser.id)
+        .order('created_at', { ascending: true })
+        .limit(1);
+
+    if (error) { console.error('Erreur recherche de partie :', error); await customAlert('Erreur', 'Impossible de chercher une partie. Réessaie.'); return; }
+
+    if (waitingGames && waitingGames.length > 0) {
+        await joinGame(waitingGames[0].id);
+    } else {
+        document.querySelector('.waiting-msg').textContent = '⏳ En attente d\'un adversaire...';
+        await createGame();
+    }
+}
+
+document.getElementById('lobbyBackBtn').addEventListener('click', async () => {
+    if (currentGameId) await cancelWaiting();
+    document.getElementById('lobbyScreen').classList.remove('show');
+    document.getElementById('mainMenu').style.display = 'flex';
+});
+
 window.joinGame = async function(gameId) {
     const { data: collection, error: collectionError } = await window.mySupabase.from('player_collections').select('roster, owned_cards').eq('user_id', currentUser.id).single();
     if (collectionError) { console.error("Erreur chargement collection :", collectionError); alert("Impossible de charger ta collection. Réessaie."); return; }
     if (collection) { roster = collection.roster || { starters: [], sixthMan: null }; ownedCards = collection.owned_cards || []; }
-    const { error: updateError } = await window.mySupabase.from('games').update({ player2_id: currentUser.id, status: 'in_progress' }).eq('id', gameId);
-    if (updateError) { console.error("Erreur mise à jour partie :", updateError); alert("Impossible de rejoindre la partie. Réessaie."); return; }
-    currentGameId = gameId; isOnlineMode = true;
+
+    myPlayerNumber = 2;
+    isOnlineMode = true;
+    gameHasStarted = false;
+    lastAppliedBattleId = null;
+    currentGameId = gameId;
+
+    const { error: updateError } = await window.mySupabase.from('games').update({
+        player2_id: currentUser.id,
+        player2_roster: roster,
+        status: 'in_progress',
+    }).eq('id', gameId);
+    if (updateError) {
+        console.error("Erreur mise à jour partie :", updateError);
+        alert("Impossible de rejoindre la partie. Réessaie.");
+        myPlayerNumber = 1; isOnlineMode = false; currentGameId = null;
+        return;
+    }
+
+    initRealtime(currentGameId);
     document.getElementById('lobbyScreen').classList.remove('show');
-    startGame();
+    document.getElementById('waitingRoom').style.display = 'block';
+    document.getElementById('lobbyContent').style.display = 'none';
 };
 
 async function createGame() {
@@ -1803,7 +2368,17 @@ async function createGame() {
     if (collError) { console.error("Erreur chargement collection :", collError); alert("Impossible de charger ta collection."); return; }
     roster = collection?.roster || { starters: [], sixthMan: null };
     ownedCards = collection?.owned_cards || [];
-    const { data: newGame, error: insertError } = await window.mySupabase.from('games').insert({ player1_id: currentUser.id, status: 'waiting' }).select().single();
+
+    myPlayerNumber = 1;
+    isOnlineMode = true;
+    gameHasStarted = false;
+    lastAppliedBattleId = null;
+
+    const { data: newGame, error: insertError } = await window.mySupabase.from('games').insert({
+        player1_id: currentUser.id,
+        player1_roster: roster,
+        status: 'waiting',
+    }).select().single();
     if (insertError) { console.error("Erreur création partie :", insertError); alert("Impossible de créer la partie."); return; }
     currentGameId = newGame.id;
     document.getElementById('lobbyContent').style.display = 'none';
@@ -1818,6 +2393,8 @@ async function cancelWaiting() {
     document.getElementById('lobbyContent').style.display = 'block';
     document.getElementById('waitingRoom').style.display = 'none';
     currentGameId = null;
+    isOnlineMode = false;
+    myPlayerNumber = 1;
     loadGames();
 }
 

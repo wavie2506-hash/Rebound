@@ -50,6 +50,7 @@
     <div id="lobbyScreen" class="lobby-screen">
         <div class="lobby-box">
             <div class="lobby-header">
+                <button id="lobbyBackBtn" class="lobby-logout">← Retour</button>
                 <div class="lobby-user">👤 <span id="lobbyUser">Joueur</span></div>
                 <button id="logoutBtn" class="lobby-logout">Déconnexion</button>
             </div>
@@ -73,19 +74,29 @@
 
     <!-- MAIN MENU -->
     <div class="main-menu" id="mainMenu">
+        <div class="currency-bar">
+            <span class="currency-pill">🪙 <span class="currency-credits">0</span></span>
+            <span class="currency-pill">⚡ <span class="currency-tokens">0</span></span>
+        </div>
         <div class="menu-title">🏀 REBOUND</div>
         <div class="menu-buttons">
             <button class="menu-btn menu-btn-play" id="playBtn">▶️ JOUER</button>
             <button class="menu-btn menu-btn-packs" id="packsBtn">📦 PACKS</button>
+            <button class="menu-btn" id="shopBtn">🛒 BOUTIQUE</button>
+            <button class="menu-btn" id="passBtn">🎖️ PASS CULTURE</button>
             <button class="menu-btn menu-btn-locker" id="lockerBtn">👕 VESTIAIRE</button>
             <button class="menu-btn menu-btn-settings" id="settingsBtn">⚙️ PARAMÈTRES</button>
         </div>
-        <div class="menu-subtitle">Choisissez une option pour commencer</div>
+        
     </div>
 
     <!-- GAME CONTAINER -->
     <div class="game-container" style="display: none;">
         <div class="header"><h1>🏀 Rebound</h1></div>
+        <div class="currency-bar in-game">
+            <span class="currency-pill">🪙 <span class="currency-credits">0</span></span>
+            <span class="currency-pill">⚡ <span class="currency-tokens">0</span></span>
+        </div>
         <div class="score-board">
             <div><div>Joueur 1</div><div class="score" id="score1">0</div></div>
             <div><div>Joueur 2</div><div class="score" id="score2">0</div></div>
@@ -182,6 +193,43 @@
         </div>
     </div>
 
+    <!-- BOUTIQUE -->
+    <div id="shopPage" class="shop-page">
+        <div class="locker-top-bar">
+            <button class="locker-back-btn" id="shopBackBtn">← Retour</button>
+            <div class="currency-bar in-game">
+                <span class="currency-pill">🪙 <span class="currency-credits">0</span></span>
+                <span class="currency-pill">⚡ <span class="currency-tokens">0</span></span>
+            </div>
+        </div>
+        <div class="shop-content">
+            <div class="shop-section-title">📦 Packs de cartes</div>
+            <div id="shopPacksGrid" class="shop-packs-grid"></div>
+        </div>
+    </div>
+
+    <!-- PASS CULTURE -->
+    <div id="passPage" class="pass-page">
+        <div class="locker-top-bar">
+            <button class="locker-back-btn" id="passBackBtn">← Retour</button>
+            <div class="currency-bar in-game">
+                <span class="currency-pill">🪙 <span class="currency-credits">0</span></span>
+                <span class="currency-pill">⚡ <span class="currency-tokens">0</span></span>
+            </div>
+        </div>
+        <div class="pass-content">
+            <div class="pass-section-title">🎖️ Pass Culture</div>
+            <div id="passLevelBar" class="pass-level-bar"></div>
+            <div id="passTiersRow" class="pass-tiers-row"></div>
+
+            <div class="pass-section-title">📅 Connexion quotidienne</div>
+            <div id="dailyLoginRow" class="daily-login-row"></div>
+
+            <div class="pass-section-title">✅ Quêtes du jour</div>
+            <div id="dailyQuestsList" class="daily-quests-list"></div>
+        </div>
+    </div>
+
     <!-- MODALS -->
     <div id="customModal" class="custom-modal">
         <div class="modal-content">
@@ -207,12 +255,11 @@
     <!-- VESTIAIRE -->
     <div id="lockerPage" class="locker-page">
         <div class="locker-top-bar">
-            <h1>👕 VESTIAIRE</h1>
             <button class="locker-back-btn" id="lockerBackBtn">← Retour</button>
-        </div>
-        <div class="locker-tabs">
-            <button class="locker-tab active" id="tabEffectif">🏀 Effectif</button>
-            <button class="locker-tab" id="tabCollection">📂 Collection</button>
+            <div class="locker-tabs">
+                <button class="locker-tab active" id="tabEffectif">🏀 Effectif</button>
+                <button class="locker-tab" id="tabCollection">📂 Collection</button>
+            </div>
         </div>
         <div id="effectifContainer" class="effectif-container show">
             <div class="effectif-section-title">⭐ 5 Majeurs</div>
@@ -223,6 +270,20 @@
             <div class="effectif-section-title" style="margin-top:32px;">
                 📦 Ma Collection
                 <span id="collectionCount" style="font-size:13px; color:rgba(255,255,255,0.4); font-weight:normal; letter-spacing:0; margin-left:10px;"></span>
+            </div>
+            <div class="collection-filters">
+                <input type="text" id="collectionSearch" class="collection-filter-input" placeholder="🔍 Rechercher un joueur...">
+                <select id="collectionTeamFilter" class="collection-filter-select">
+                    <option value="">Toutes les équipes</option>
+                </select>
+                <select id="collectionPositionFilter" class="collection-filter-select">
+                    <option value="">Tous les postes</option>
+                    <option value="PG">PG</option>
+                    <option value="SG">SG</option>
+                    <option value="SF">SF</option>
+                    <option value="PF">PF</option>
+                    <option value="C">C</option>
+                </select>
             </div>
             <div id="ownedCardsList" class="owned-cards-list"></div>
         </div>
